@@ -3,7 +3,7 @@
 #
 # wiki.pl - PurpleWiki
 #
-# $Id: wiki.pl 464 2004-08-09 01:38:51Z cdent $
+# $Id: wiki.pl 474 2004-08-11 08:28:49Z cdent $
 #
 # Copyright (c) Blue Oxen Associates 2002.  All rights reserved.
 #
@@ -48,7 +48,7 @@ use PurpleWiki::Search::Engine;
 my $CONFIG_DIR='/var/www/wikidb';
 
 our $VERSION;
-$VERSION = sprintf("%d", q$Id: wiki.pl 464 2004-08-09 01:38:51Z cdent $ =~ /\s(\d+)\s/);
+$VERSION = sprintf("%d", q$Id: wiki.pl 474 2004-08-11 08:28:49Z cdent $ =~ /\s(\d+)\s/);
 
 local $| = 1;  # Do not buffer output (localized for mod_perl)
 
@@ -274,6 +274,12 @@ sub BrowsePage {
   my @vPages = &visitedPages;
   my $keywords = $id;
   $keywords =~ s/_/\+/g if ($config->FreeLinks);
+
+  my $editRevisionString = '';
+  if ($goodRevision) {
+      $editRevisionString = "&amp;revision=$revision";
+  }
+
   $wikiTemplate->vars(&globalTemplateVars,
                       pageName => $pageName,
                       expandedPageName => &expandPageName($pageName),
@@ -285,7 +291,8 @@ sub BrowsePage {
                       pageUrl => $config->ScriptName . "?$id",
                       backlinksUrl => $config->ScriptName . "?search=$keywords",
                       editUrl =>
-                        $config->ScriptName . "?action=edit&amp;id=$id",
+                        $config->ScriptName . "?action=edit&amp;id=$id" .
+                        $editRevisionString,
                       revisionsUrl =>
                         $config->ScriptName . "?action=history&amp;id=$id",
                       diffUrl =>
@@ -413,7 +420,7 @@ sub DoHistory {
 
 sub getRevisionHistory {
     my ($id, $section, $isCurrent) = @_;
-    my ($rev, $summary, $host, $user, $uid, $ts, $pageUrl, $diffUrl);
+    my ($rev, $summary, $host, $user, $uid, $ts, $pageUrl, $diffUrl, $editUrl);
 
     my $text = $section->getText();
     $rev = $section->getRevision();
@@ -436,6 +443,8 @@ sub getRevisionHistory {
           "?action=browse&amp;id=$id&amp;revision=$rev";
         $diffUrl = $config->ScriptName .
             "?action=browse&amp;diff=1&amp;id=$id&amp;diffrevision=$rev";
+        $editUrl = $config->ScriptName .
+            "?action=edit&amp;id=$id&amp;revision=$rev";
     }
     if (defined($summary) && ($summary ne "") && ($summary ne "*")) {
         $summary = QuoteHtml($summary);   # Thanks Sunir! :-)
@@ -449,7 +458,8 @@ sub getRevisionHistory {
              user => $user,
              summary => $summary,
              pageUrl => $pageUrl,
-             diffUrl => $diffUrl };
+             diffUrl => $diffUrl,
+             editUrl => $editUrl };
 }
 
 # ==== page-oriented functions ====
@@ -1171,6 +1181,7 @@ sub DoSearch {
 sub DoPost {
   my ($editDiff, $old, $newAuthor, $pgtime, $oldrev, $preview);
   my $userName = $user ? $user->username : undef;
+  my $userId = $user ? $user->id : undef;
   my $string = GetParam("text", undef);
   my $id = GetParam("title", "");
   my $summary = GetParam("summary", "");
@@ -1300,6 +1311,8 @@ sub DoPost {
   # FIXME: redundancy in data structure here
   $section->setRevision($section->getRevision() + 1);
   $section->setTS($Now);
+  $section->setUsername($userName);
+  $section->setID($userId);
   $keptRevision->addSection($section, $Now);
   $keptRevision->trimKepts($Now);
   $keptRevision->save();

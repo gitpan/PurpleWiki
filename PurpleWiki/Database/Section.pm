@@ -1,7 +1,7 @@
 # PurpleWiki::Database::Section
 # vi:sw=4:ts=4:ai:sm:et:tw=0
 #
-# $Id: Section.pm 428 2004-07-26 00:46:41Z cdent $
+# $Id: Section.pm 473 2004-08-11 07:51:17Z cdent $
 #
 # Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
 #
@@ -32,14 +32,14 @@ package PurpleWiki::Database::Section;
 
 # PurpleWiki Section Data Access
 
-# $Id: Section.pm 428 2004-07-26 00:46:41Z cdent $
+# $Id: Section.pm 473 2004-08-11 07:51:17Z cdent $
 
 use strict;
 use PurpleWiki::Config;
 use PurpleWiki::Database::Text;
 
 our $VERSION;
-$VERSION = sprintf("%d", q$Id: Section.pm 428 2004-07-26 00:46:41Z cdent $ =~ /\s(\d+)\s/);
+$VERSION = sprintf("%d", q$Id: Section.pm 473 2004-08-11 07:51:17Z cdent $ =~ /\s(\d+)\s/);
 
 # Creates a new Section reference, may be a
 # a new one or an existing one. Arguments
@@ -99,6 +99,11 @@ sub getID {
     return $self->{id};
 }
 
+sub setID {
+    my $self = shift;
+    $self->{id} = shift;
+}
+
 # Gets the username that last edited this Section.
 # FIXME: Discussion on UseModWiki points out that keeping
 # both ID and username is problematic from a clean
@@ -106,6 +111,11 @@ sub getID {
 sub getUsername {
     my $self = shift;
     return $self->{username};
+}
+
+sub setUsername {
+    my $self = shift;
+    $self->{username} = shift;
 }
 
 # Gets the revision of this section. If this Section
