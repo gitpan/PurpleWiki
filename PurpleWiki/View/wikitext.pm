@@ -1,9 +1,8 @@
 # PurpleWiki::View::wikitext.pm
-# vi:ai:sm:et:sw=4:ts=4
 #
-# $Id: wikitext.pm,v 1.10 2004/01/21 23:24:08 cdent Exp $
+# $Id$
 #
-# Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
+# Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
 # This file is part of PurpleWiki.  PurpleWiki is derived from:
 #
@@ -29,247 +28,439 @@
 #    Boston, MA 02111-1307 USA
 
 package PurpleWiki::View::wikitext;
-
 use 5.005;
 use strict;
-use PurpleWiki::Tree;
-use PurpleWiki::View::EventHandler;
+use warnings;
+use Carp;
+use PurpleWiki::View::Driver;
 
-use vars qw($VERSION);
-$VERSION = '0.9.1';
+############### Package Globals ###############
 
-# globals
+our $VERSION = '0.9.2';
 
-my $sectionDepth = 0;
-my $indentDepth = 0;
-my @listStack;
-my $lastInlineProcessed = '';
-my @sectionState;
+our @ISA = qw(PurpleWiki::View::Driver);
 
-# structural node event handlers
 
-sub startList {
-    my $structuralNode = shift;
+############### Overloaded Methods ###############
 
-    push @listStack, $structuralNode->type;
-    return '';
-}
+sub new {
+    my $proto = shift;
+    my $class = ref($proto) || $proto;
+    my $self = $class->SUPER::new(@_);
+   
+    ### Object State
+    $self->{outputString} = "";
+    $self->{indentDepth} = 0;
+    $self->{listStack} = [];
 
-sub endList {
-    pop @listStack;
-    $lastInlineProcessed = '';
-    return "\n" if (scalar @listStack == 0);
-}
+    # standard flag for determining whether or not a hard rule should
+    # be printed
+    $self->{isPrevSection} = 0;
 
-sub showNid {
-    my $structuralNode = shift;
-    $lastInlineProcessed = '';
-    my $outputString = &_nid($structuralNode->id);
-    if ($structuralNode->type eq 'dt') {
-        return $outputString;
-    }
-    elsif ($structuralNode->type eq 'pre') {
-        return $outputString . "\n\n";
-    }
-    else {
-        return $outputString . "\n";
-    }
-}
+    # special case flag for handling hard rules (or not) at the
+    # beginning of a document
+    $self->{isStart} = 1;
+    $self->{emptyFirstSection} = 0;
 
-# inline node event handlers
+    # used for determining whether there should be hard rules with
+    # nested sections
+    $self->{sectionDepth} = 0;
+    $self->{depthLastClosedSection} = 0;
 
-sub inlineContent {
-    my $inlineNode = shift;
+    # needed for determining whether a WikiWord needs to be delimited
+    # from subsequent text
+    $self->{lastInlineProcessed} = "";
 
-    return $inlineNode->content;
-}
-
-# functions
-
-sub registerHandlers {
-    $PurpleWiki::View::EventHandler::structuralHandler{section}->{pre} =
-        sub { $sectionDepth++; return ''; };
-    $PurpleWiki::View::EventHandler::structuralHandler{section}->{post} =
-        sub { $sectionDepth--;
-              $lastInlineProcessed = '';
-              return ''; };
-
-    $PurpleWiki::View::EventHandler::structuralHandler{indent}->{pre} =
-        sub { $indentDepth++; return ''; };
-    $PurpleWiki::View::EventHandler::structuralHandler{indent}->{post} =
-        sub { $indentDepth--;
-              $lastInlineProcessed = '';
-              return "\n" if ($indentDepth == 0); };
-
-    $PurpleWiki::View::EventHandler::structuralHandler{ul}->{pre} = \&startList;
-    $PurpleWiki::View::EventHandler::structuralHandler{ul}->{post} = \&endList;
-
-    $PurpleWiki::View::EventHandler::structuralHandler{ol}->{pre} = \&startList;
-    $PurpleWiki::View::EventHandler::structuralHandler{ol}->{post} = \&endList;
-
-    $PurpleWiki::View::EventHandler::structuralHandler{dl}->{pre} = \&startList;
-    $PurpleWiki::View::EventHandler::structuralHandler{dl}->{post} = \&endList;
-
-    $PurpleWiki::View::EventHandler::structuralHandler{h}->{pre} =
-        sub { return '=' x $sectionDepth . ' '; };
-    $PurpleWiki::View::EventHandler::structuralHandler{h}->{post} =
-        sub { my $structuralNode = shift;
-              $lastInlineProcessed = '';
-              return &_nid($structuralNode->id) . ' ' . '=' x $sectionDepth . "\n\n"; };
-
-    $PurpleWiki::View::EventHandler::structuralHandler{p}->{pre} =
-        sub { return ':' x $indentDepth; };
-    $PurpleWiki::View::EventHandler::structuralHandler{p}->{post} =
-        sub { my $structuralNode = shift;
-              my $outputString = &_nid($structuralNode->id) . "\n";
-              $outputString .= "\n" if ($indentDepth == 0);
-              $lastInlineProcessed = '';
-              return $outputString; };
-
-    $PurpleWiki::View::EventHandler::structuralHandler{li}->{pre} =
-        sub { if ($listStack[$#listStack] eq 'ul') {
-                  return '*' x scalar(@listStack) . ' ';
-              }
-              else {
-                  return '#' x scalar(@listStack) . ' ';
-              } };
-    $PurpleWiki::View::EventHandler::structuralHandler{li}->{post} = \&showNid;
-
-    $PurpleWiki::View::EventHandler::structuralHandler{dt}->{pre} =
-        sub { return ';' x scalar(@listStack); };
-    $PurpleWiki::View::EventHandler::structuralHandler{dt}->{post} = \&showNid;
-
-    $PurpleWiki::View::EventHandler::structuralHandler{dd}->{pre} =
-        sub { return ':'; };
-    $PurpleWiki::View::EventHandler::structuralHandler{dd}->{post} = \&showNid;
-
-    $PurpleWiki::View::EventHandler::structuralHandler{pre}->{post} = \&showNid;
-    $PurpleWiki::View::EventHandler::structuralHandler{sketch}->{main} =
-        sub { return "{sketch}\n\n"; };
-
-    $PurpleWiki::View::EventHandler::inlineHandler{b}->{pre} =
-        sub { return "'''"; };
-    $PurpleWiki::View::EventHandler::inlineHandler{b}->{post} =
-        sub { $lastInlineProcessed = 'b'; return "'''"; };
-
-    $PurpleWiki::View::EventHandler::inlineHandler{i}->{pre} =
-        sub { return "''"; };
-    $PurpleWiki::View::EventHandler::inlineHandler{i}->{post} =
-        sub { $lastInlineProcessed = 'i'; return "''"; };
-
-    $PurpleWiki::View::EventHandler::inlineHandler{tt}->{pre} =
-        sub { return "<tt>"; };
-    $PurpleWiki::View::EventHandler::inlineHandler{tt}->{post} =
-        sub { $lastInlineProcessed = 'tt'; return "</tt>"; };
-
-    $PurpleWiki::View::EventHandler::inlineHandler{text}->{pre} =
-        sub { my $structuralNode = shift;
-              if ($lastInlineProcessed eq 'wikiword' &&
-                  $structuralNode->content =~ /^\w/) {
-                  return '""';
-              }
-              else {
-                  return '';
-              } };
-    $PurpleWiki::View::EventHandler::inlineHandler{text}->{main} = \&inlineContent;
-    $PurpleWiki::View::EventHandler::inlineHandler{text}->{post} =
-        sub { $lastInlineProcessed = 'text'; return ''; };
-
-    $PurpleWiki::View::EventHandler::inlineHandler{nowiki}->{pre} =
-        sub { return '<nowiki>'; };
-    $PurpleWiki::View::EventHandler::inlineHandler{nowiki}->{main} = \&inlineContent;
-    $PurpleWiki::View::EventHandler::inlineHandler{nowiki}->{post} =
-        sub { $lastInlineProcessed = 'nowiki'; return '</nowiki>'; };
-
-    $PurpleWiki::View::EventHandler::inlineHandler{transclusion}->{pre} =
-        sub { my $inlineNode = shift; return '[t '; };
-    $PurpleWiki::View::EventHandler::inlineHandler{transclusion}->{main} = \&inlineContent;
-    $PurpleWiki::View::EventHandler::inlineHandler{transclusion}->{post} =
-        sub { $lastInlineProcessed = 'transclusion'; return ']'; };
-
-    $PurpleWiki::View::EventHandler::inlineHandler{link}->{pre} =
-        sub { my $inlineNode = shift; return '[' . $inlineNode->href . ' '; };
-    $PurpleWiki::View::EventHandler::inlineHandler{link}->{main} = \&inlineContent;
-    $PurpleWiki::View::EventHandler::inlineHandler{link}->{post} =
-        sub { $lastInlineProcessed = 'link'; return ']'; };
-
-    $PurpleWiki::View::EventHandler::inlineHandler{url}->{main} = \&inlineContent;
-    $PurpleWiki::View::EventHandler::inlineHandler{url}->{post} =
-        sub { $lastInlineProcessed = 'url'; return ''; };
-
-    $PurpleWiki::View::EventHandler::inlineHandler{wikiword}->{main} = \&inlineContent;
-    $PurpleWiki::View::EventHandler::inlineHandler{wikiword}->{post} =
-        sub { $lastInlineProcessed = 'wikiword'; return ''; };
-
-    $PurpleWiki::View::EventHandler::inlineHandler{freelink}->{pre} =
-        sub { return '[['; };
-    $PurpleWiki::View::EventHandler::inlineHandler{freelink}->{main} = \&inlineContent;
-    $PurpleWiki::View::EventHandler::inlineHandler{freelink}->{post} =
-        sub { $lastInlineProcessed = 'freelink'; return ']]'; };
-
-    $PurpleWiki::View::EventHandler::inlineHandler{image}->{main} = \&inlineContent;
-    $PurpleWiki::View::EventHandler::inlineHandler{image}->{post} =
-        sub { $lastInlineProcessed = 'image'; return ''; };
+    bless($self, $class);
+    return $self;
 }
 
 sub view {
-    my ($wikiTree, %params) = @_;
-
-    &registerHandlers;
-    return _textHeader($wikiTree, %params) . 
-    	&PurpleWiki::View::EventHandler::view($wikiTree, %params);
+    my ($self, $wikiTree) = @_;
+    $self->SUPER::view($wikiTree);
+    $self->{outputString} = $self->_header($wikiTree) . $self->{outputString};
+    chomp $self->{outputString};
+    return $self->{outputString};
 }
 
-# private
+# The most general case for generating hard rules is as follows: If
+# the first structured node of a new section (with the exception of
+# the very first section) does not begin with an h node, then print a
+# hard rule.  The trickiness is dealing with the exceptions: sections
+# at the beginning of a document and nested subsections.
+#
+# 
+#
+# When you create headers that are more than one level deeper than the
+# previous section, you get things like:
+#
+#   section:
+#     h:section 1
+#     section:
+#       section:
+#         h:section 1.1.1
+#
+# Note the two sections immediately nested after each other.  A
+# similar effect is possible when you have a hard rule followed by a
+# header that is one or more levels deeper:
+#
+#   section:
+#     h:section 1
+#   section:
+#     section:
+#       h:section 2.1
+#
+# Because of these two possible scenarios, it's not enough to simply
+# print a hard rule whenever you see nested sections one right after
+# the other.
+
+sub sectionPre { 
+    my $self = shift;
+    $self->{sectionDepth}++;
+    $self->_hardRule(1);
+    $self->{isPrevSection} = 1;
+}
+
+sub sectionPost {
+    my $self = shift;
+    $self->{depthLastClosedSection} = $self->{sectionDepth};
+    $self->{sectionDepth}--;
+    $self->{lastInlineProcessed} = '';
+    $self->{emptyFirstSection} = 1
+        if ($self->{isStart} && $self->{isPrevSection});
+    $self->_hardRule(0);
+    $self->{isStart} = 0;
+}
+
+sub indentPre { 
+    my $self = shift;
+    $self->_hardRule(0);
+    $self->{indentDepth}++; 
+}
+
+sub indentPost { 
+    my $self = shift;
+    $self->{indentDepth}--;
+    $self->{lastInlineProcessed} = '';
+    $self->{outputString} .= "\n" if $self->{indentDepth} == 0; 
+}
+
+sub ulPre {
+    my ($self, $nodeRef) = @_;
+    $self->_hardRule(0);
+    push @{$self->{listStack}}, $nodeRef->type;
+}
+
+sub olPre {
+    my ($self, $nodeRef) = @_;
+    $self->_hardRule(0);
+    push @{$self->{listStack}}, $nodeRef->type;
+}
+
+sub dlPre {
+    my ($self, $nodeRef) = @_;
+    $self->_hardRule(0);
+    push @{$self->{listStack}}, $nodeRef->type;
+}
+
+sub ulPost { shift->_endList(@_) }
+sub olPost { shift->_endList(@_) }
+sub dlPost { shift->_endList(@_) }
+
+sub hPre { 
+    my $self = shift;
+    if ($self->{emptyFirstSection}) {
+        $self->{isPrevSection} = 1;
+        $self->{emptyFirstSection} = 0;
+        $self->_hardRule(0);
+    }
+    else {
+        $self->{isPrevSection} = 0;
+    }
+    $self->{outputString} .= '=' x $self->{sectionDepth}. ' '; 
+}
+
+sub hPost { 
+    my ($self, $nodeRef) = @_;
+    $self->{lastInlineProcessed} = '';
+    $self->{outputString} .= $self->_nid($nodeRef->id) . " ";
+    $self->{outputString} .= '=' x $self->{sectionDepth} . "\n\n";
+}
+
+sub pPre { 
+    my $self = shift;
+    $self->_hardRule(0);
+    $self->{outputString} .= ':' x $self->{indentDepth};
+}
+
+sub pPost { 
+    my ($self, $nodeRef) = @_;
+    $self->{lastInlineProcessed} = '';
+    $self->{outputString} .= $self->_nid($nodeRef->id) . "\n";
+    $self->{outputString} .= "\n" if $self->{indentDepth} == 0;
+}
+
+sub liPre { 
+    my $self = shift;
+    my $bullet = ($self->{listStack}->[-1] eq 'ul') ? '*' : '#';
+    $self->{outputString} .= $bullet x scalar(@{$self->{listStack}}) . ' ';
+}
+
+sub dtPre { 
+    my $self = shift;
+    $self->{outputString} .= ';' x scalar(@{$self->{listStack}});
+}
+
+sub ddPre { 
+    shift->{outputString} .= ':' 
+}
+
+sub liMain { shift->_liRecurse(@_) }
+sub ddMain { shift->_liRecurse(@_) }
+
+sub dtPost { shift->_showNID(@_) }
+
+sub prePre { shift->_hardRule(0) }
+
+sub prePost { shift->_showNID(@_) }
+
+sub sketchMain { 
+    shift->{outputString} .= "{sketch}\n\n";
+}
+
+sub bPre { 
+    shift->{outputString} .= "'''";
+}
+
+sub bPost { 
+    my $self = shift;
+    $self->{lastInlineProcessed} = 'b'; 
+    $self->{outputString} .= "'''"; 
+}
+
+sub iPre { 
+    shift->{outputString} .= "''";
+}
+
+sub iPost { 
+    my $self = shift;
+    $self->{lastInlineProcessed} = 'i'; 
+    $self->{outputString} .= "''"; 
+}
+
+sub ttPre { 
+    shift->{outputString} .= "<tt>";
+}
+
+sub ttPost { 
+    my $self = shift;
+    $self->{lastInlineProcessed} = 'tt'; 
+    $self->{outputString} .=  "</tt>"; 
+}
+
+sub textPre { 
+    my ($self, $nodeRef) = @_;
+    if ($self->{lastInlineProcessed} eq 'wikiword') {
+        if ($nodeRef->content =~ /^\w/) {
+            $self->{outputString} .= '""';
+        }
+    }
+}
+
+sub textMain { shift->{outputString} .= shift->content }
+sub nowikiMain { shift->{outputString} .= shift->content }
+sub transclusionMain { shift->{outputString} .= shift->content }
+sub linkMain { shift->{outputString} .= shift->content }
+sub urlMain { shift->{outputString} .= shift->content }
+sub wikiwordMain { shift->{outputString} .= shift->content }
+sub freelinkMain { shift->{outputString} .= shift->content }
+sub imageMain { shift->{outputString} .= shift->content }
+
+sub textPost { shift->{lastInlineProcessed} = 'text' }
+
+sub nowikiPre { shift->{outputString} .= '<nowiki>' }
+
+sub nowikiPost { 
+    my $self = shift;
+    $self->{lastInlineProcessed} = 'nowiki'; 
+    $self->{outputString} .= '</nowiki>'; 
+}
+
+sub transclusionPre { 
+    shift->{outputString} .= '[t ';
+}
+
+sub transclusionPost { 
+    my $self = shift;
+    $self->{lastInlineProcessed} = 'transclusion'; 
+    $self->{outputString} .= ']'; 
+}
+
+sub linkPre { 
+    my ($self, $nodeRef) = @_; 
+    $self->{outputString} .= '[' . $nodeRef->href . ' '; 
+}
+
+sub linkPost { 
+    my $self = shift;
+    $self->{lastInlineProcessed} = 'link'; 
+    $self->{outputString} .= ']'; 
+}
+
+sub urlPost { 
+    shift->{lastInlineProcessed} = 'url';
+}
+
+sub wikiwordPost { 
+    shift->{lastInlineProcessed} = 'wikiword'; 
+}
+
+sub freelinkPre { 
+    shift->{outputString} .= '[['; 
+}
+
+sub freelinkPost { 
+    my $self = shift;
+    $self->{lastInlineProcessed} = 'freelink'; 
+    $self->{outputString} .= ']]'; 
+}
+
+sub imagePost { 
+    shift->{lastInlineProcessed} = 'image'; 
+}
+
+
+############### Private Methods ###############
+
+sub _hardRule {
+    my ($self, $isSection) = @_;
+
+    if ($self->{isPrevSection}) {
+        if (!$self->{isStart}) {
+            if (!$isSection || ($isSection &&
+                $self->{sectionDepth} == $self->{depthLastClosedSection} + 1) ) {
+                $self->{outputString} .= "----\n\n";
+            }
+        }
+        $self->{isPrevSection} = 0;
+    }
+}
+
+sub _liRecurse { # also used for dd
+    my ($self, $nodeRef) = @_;
+
+    if (!defined $nodeRef) {
+        carp "Warning: tried to recurse on an undefined node\n";
+        return;
+    }
+    if ($nodeRef->isa('PurpleWiki::StructuralNode')) {
+        $self->traverse($nodeRef->content) if defined $nodeRef->content;
+    }
+    # display NID here
+    $self->_showNID($nodeRef);
+    $self->traverse($nodeRef->children) if defined $nodeRef->children;
+}
+
+sub _endList {
+    my $self = shift;
+    pop @{$self->{listStack}};
+    $self->{lastInlineProcessed} = '';
+    $self->{outputString} .= "\n" if scalar @{$self->{listStack}} == 0;
+}
+
+sub _showNID {
+    my ($self, $nodeRef) = @_;
+    my $nidString = $self->_nid($nodeRef->id);
+
+    $self->{lastInlineProcessed} = '';
+
+    if ($nodeRef->type eq 'dt') {
+        $self->{outputString} .= $nidString;
+    } elsif ($nodeRef->type eq 'pre') {
+        $self->{outputString} .= $nidString . "\n\n";
+    } else {
+        $self->{outputString} .= $nidString . "\n";
+    }
+}
 
 sub _nid {
-    my $nid = shift;
-
-    return " {nid $nid}";
+    my ($self, $nid) = @_;
+    my $string = ''; # avoid a unitialized value warning
+    if ($nid) {
+        $string = " {nid $nid}";
+    }
+    return $string;
 }
 
-sub _textHeader {
-    my ($wikiTree, %params) = @_;
-    my $outputString = '';
+sub _header {
+    my ($self, $wikiTree) = @_;
+    my $header = '';
 
     # FIXME: this can be a loop
     if ($wikiTree->title) {
-        $outputString .= '{title ' . $wikiTree->title . "}\n";
+        $header .= '{title ' . $wikiTree->title . "}\n";
     }
+
     if ($wikiTree->subtitle) {
-        $outputString .= '{subtitle ' . $wikiTree->subtitle . "}\n";
+        $header .= '{subtitle ' . $wikiTree->subtitle . "}\n";
     }
+
     if ($wikiTree->authors) {
         foreach my $author (@{$wikiTree->authors}) {
-            $outputString .= '{author ' . $author->[0];
+            $header .= '{author ' . $author->[0];
             if (scalar @{$author} > 1) {
-                $outputString .= ' ' . $author->[1];
+                $header .= ' ' . $author->[1];
             }
-            $outputString .= "}\n";
+            $header .= "}\n";
         }
     }
+
     if ($wikiTree->id) {
-        $outputString .= '{docid ' . $wikiTree->id . "}\n";
+        $header .= '{docid ' . $wikiTree->id . "}\n";
     }
+
     if ($wikiTree->version) {
-        $outputString .= '{version ' . $wikiTree->version . "}\n";
+        $header .= '{version ' . $wikiTree->version . "}\n";
     }
+
     if ($wikiTree->date) {
-        $outputString .= '{date ' . $wikiTree->date . "}\n";
+        $header .= '{date ' . $wikiTree->date . "}\n";
     }
 
-    return $outputString;
+    return $header;
 }
-
-
 1;
 __END__
 
 =head1 NAME
 
-PurpleWiki::View::wikitext - WikiText view driver
+PurpleWiki::View::wikitext - View Driver used for WikiText output.
+
+=head1 DESCRIPTION
+
+Converts a PurpleWiki::Tree into WikiText. 
+
+=head1 OBJECT STATE
+
+=head2 outputString 
+
+This contains the current working copy of the text that is ultimately returned
+by view().
+
+=head1 METHODS
+
+=head2 new(config => $config)
+
+Returns a new PurpleWiki::View::wikitext object  If config is not passed in
+then a fatal error occurs.  
+
+=head2 view($wikiTree)
+
+Returns the output as a string of WikiText.
 
 =head1 AUTHORS
+
+Matthew O'Connor, E<lt>matthew@canonical.orgE<gt>
 
 Chris Dent, E<lt>cdent@blueoxen.orgE<gt>
 
@@ -277,6 +468,6 @@ Eugene Eric Kim, E<lt>eekim@blueoxen.orgE<gt>
 
 =head1 SEE ALSO
 
-L<PurpleWiki::View::EventHandler>.
+L<PurpleWiki::View::Driver>
 
 =cut

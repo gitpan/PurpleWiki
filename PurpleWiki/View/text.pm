@@ -1,8 +1,8 @@
 # PurpleWiki::View::text.pm
 #
-# $Id: text.pm,v 1.7 2004/01/21 23:24:08 cdent Exp $
+# $Id$
 #
-# Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
+# Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
 # This file is part of PurpleWiki.  PurpleWiki is derived from:
 #
@@ -28,278 +28,182 @@
 #    Boston, MA 02111-1307 USA
 
 package PurpleWiki::View::text;
-
 use 5.005;
 use strict;
+use warnings;
 use Text::Wrap;
-use PurpleWiki::Tree;
-use PurpleWiki::View::EventHandler;
+use PurpleWiki::View::rawtext;
 
-use vars qw($VERSION);
-$VERSION = '0.9.1';
+############### Package Globals ###############
 
-# globals
+our $VERSION = '0.9.2';
 
-my $initialIndent;
-my $subsequentIndent;
+our @ISA = qw(PurpleWiki::View::rawtext);
 
-my $listNumber = 1;
-my $prevDefType;
 
-my @links;
-my $linksIndex = 1;
+############### Overloaded Methods ###############
 
-my $showLinks = 1;
+sub new {
+    my $proto = shift;
+    my $class = ref($proto) || $proto;
+    my $self = $class->SUPER::new(@_);
 
-# structural node event handlers
+    # Object State
+    $self->{linksIndex} = 1;
+    $self->{showLinks} = 1;
 
-sub setIndent {
-    my ($structuralNode, %params) = @_;
-
-    my $initialOffset = 1;
-    my $subsequentOffset = 1;
-    my $subsequentMore = 0;
-    my $listMore = 0;
-    if ($structuralNode->type eq 'li') {
-        $initialOffset = 2;
-        $subsequentOffset = 2;
-        $listMore = 2;
-        if ($params{listType} eq 'ul') {
-            $subsequentMore = 2;
-        }
-        elsif ($params{listType} eq 'ol') {
-            $subsequentMore = 3;
-        }
-    }
-    elsif ($structuralNode->type eq 'dt') {
-        $initialOffset = 2;
-        $subsequentOffset = 2;
-    }
-    $initialIndent = ' ' x ( ($params{indentLevel} - $initialOffset) * 4
-                             + $listMore);
-    $subsequentIndent = ' ' x ( ($params{indentLevel} - $subsequentOffset) * 4
-                                + $subsequentMore + $listMore);
-    return '';
-}
-
-sub recurseList {
-    my ($structuralNode, %params) = @_;
-
-    $params{indentLevel}++;
-    $params{listType} = $structuralNode->type;
-    if ($structuralNode->type eq 'ol') {
-        $listNumber = 1;
-    }
-    return &PurpleWiki::View::EventHandler::traverseStructural($structuralNode->children, %params);
-}
-
-sub structuralContent {
-    my ($structuralNode, %params) = @_;
-
-    if ($structuralNode->content) {
-        my $nodeString = &PurpleWiki::View::EventHandler::traverseInline($structuralNode->content, %params);
-        if ($structuralNode->type eq 'li') {
-            if ($params{listType} eq 'ul') {
-                $nodeString = "* $nodeString";
-            }
-            elsif ($params{listType} eq 'ol') {
-                $nodeString = "$listNumber. $nodeString";
-                $listNumber++;
-            }
-        }
-        if ($structuralNode->type eq 'pre') {
-            return &Text::Wrap::wrap($initialIndent,
-                                     $subsequentIndent,
-                                     $nodeString);
-        }
-        else {
-            return &Text::Wrap::fill($initialIndent,
-                                     $subsequentIndent,
-                                     $nodeString);
-        }
-    }
-}
-
-sub newLineSetIndent {
-    &setIndent;
-    return "\n";
-}
-
-sub newLine {
-    my $structuralNode = shift;
-
-    return "\n";
-}
-
-# inline node event handlers
-
-sub inlineContent {
-    my $inlineNode = shift;
-
-    return $inlineNode->content;
-}
-
-# functions
-
-sub registerHandlers {
-    $PurpleWiki::View::EventHandler::structuralHandler{section}->{pre} = \&setIndent;
-
-    $PurpleWiki::View::EventHandler::structuralHandler{indent}->{pre} = \&setIndent;
-
-    $PurpleWiki::View::EventHandler::structuralHandler{ul}->{pre} = \&setIndent;
-    $PurpleWiki::View::EventHandler::structuralHandler{ul}->{main} = \&recurseList;
-
-    $PurpleWiki::View::EventHandler::structuralHandler{ol}->{pre} = \&setIndent;
-    $PurpleWiki::View::EventHandler::structuralHandler{ol}->{main} = \&recurseList;
-
-    $PurpleWiki::View::EventHandler::structuralHandler{dl}->{pre} = \&setIndent;
-
-    $PurpleWiki::View::EventHandler::structuralHandler{h}->{pre} = \&newLineSetIndent;
-    $PurpleWiki::View::EventHandler::structuralHandler{h}->{main} = \&structuralContent;
-    $PurpleWiki::View::EventHandler::structuralHandler{h}->{post} = \&newLine;
-
-    $PurpleWiki::View::EventHandler::structuralHandler{p}->{pre} = \&newLineSetIndent;
-    $PurpleWiki::View::EventHandler::structuralHandler{p}->{main} = \&structuralContent;
-    $PurpleWiki::View::EventHandler::structuralHandler{p}->{post} = \&newLine;
-
-    $PurpleWiki::View::EventHandler::structuralHandler{li}->{pre} = \&newLineSetIndent;
-    $PurpleWiki::View::EventHandler::structuralHandler{li}->{main} = \&structuralContent;
-    $PurpleWiki::View::EventHandler::structuralHandler{li}->{post} = \&newLine;
-
-    $PurpleWiki::View::EventHandler::structuralHandler{dt}->{pre} = \&newLineSetIndent;
-    $PurpleWiki::View::EventHandler::structuralHandler{dt}->{main} = \&structuralContent;
-    $PurpleWiki::View::EventHandler::structuralHandler{dt}->{post} =
-        sub { $prevDefType = 'dt'; return "\n"; };
-
-    $PurpleWiki::View::EventHandler::structuralHandler{dd}->{pre} =
-        sub { my ($structuralNode, %params) = @_;
-              &setIndent;
-              if ($prevDefType eq 'dd') {
-                  return "\n";
-              }
-              return ''; };
-    $PurpleWiki::View::EventHandler::structuralHandler{dd}->{main} = \&structuralContent;
-    $PurpleWiki::View::EventHandler::structuralHandler{dd}->{post} =
-        sub { $prevDefType = 'dd'; return "\n"; };
-
-    $PurpleWiki::View::EventHandler::structuralHandler{pre}->{pre} = \&newLineSetIndent;
-    $PurpleWiki::View::EventHandler::structuralHandler{pre}->{main} = \&structuralContent;
-    $PurpleWiki::View::EventHandler::structuralHandler{pre}->{post} = \&newLine;
-
-    $PurpleWiki::View::EventHandler::inlineHandler{b}->{pre} =
-        sub { return '*'; };
-    $PurpleWiki::View::EventHandler::inlineHandler{b}->{post} =
-        sub { return '*'; };
-
-    $PurpleWiki::View::EventHandler::inlineHandler{i}->{pre} =
-        sub { return '_'; };
-    $PurpleWiki::View::EventHandler::inlineHandler{i}->{post} =
-        sub { return '_'; };
-
-    $PurpleWiki::View::EventHandler::inlineHandler{text}->{main} = \&inlineContent;
-
-    $PurpleWiki::View::EventHandler::inlineHandler{nowiki}->{main} = \&inlineContent;
-
-    $PurpleWiki::View::EventHandler::inlineHandler{transclusion}->{pre} = 
-    	sub { print "transclude: "; };
-    $PurpleWiki::View::EventHandler::inlineHandler{transclusion}->{main} = \&inlineContent;
-
-    $PurpleWiki::View::EventHandler::inlineHandler{link}->{main} = \&inlineContent;
-
-    $PurpleWiki::View::EventHandler::inlineHandler{link}->{main} = \&inlineContent;
-    $PurpleWiki::View::EventHandler::inlineHandler{link}->{post} =
-        sub { my $inlineNode = shift;
-              if ($showLinks) {
-                  push @links, $inlineNode->href;
-                  $linksIndex++;
-                  return '[' . ($linksIndex - 1) . ']';
-              } };
-
-    $PurpleWiki::View::EventHandler::inlineHandler{url}->{main} = \&inlineContent;
-
-    $PurpleWiki::View::EventHandler::inlineHandler{wikiword}->{main} = \&inlineContent;
-
-    $PurpleWiki::View::EventHandler::inlineHandler{freelink}->{main} = \&inlineContent;
-
-    $PurpleWiki::View::EventHandler::inlineHandler{image}->{main} = \&inlineContent;
+    bless($self, $class);
+    return $self;
 }
 
 sub view {
-    my ($wikiTree, %params) = @_;
-
-    if ($params{columns} !~ /^\d+$/ || $params{columns} < 10) {
-        $params{columns} = 72;
+    my ($self, $wikiTree) = @_;
+    
+    if (!defined($self->{columns}) || $self->{columns} !~ /^\d+$/ 
+        || $self->{columns} < 10) {
+        $self->{columns} = 72;
     }
-    if (defined $params{show_links} && $params{show_links} == 0) {
-        $showLinks = 0;
+    if (defined $self->{show_links} && $self->{show_links} == 0) {
+        $self->{showLinks} = 0;
     }
 
-    $Text::Wrap::columns = $params{columns};
+    $Text::Wrap::columns = $self->{columns};
     $Text::Wrap::huge = 'overflow';
 
-    &registerHandlers;
-    return &_header($wikiTree, %params) .
-        &PurpleWiki::View::EventHandler::view($wikiTree, %params) .
-        &_footer;
+    $self->SUPER::view($wikiTree);
+
+    $self->{outputString} = $self->_header($wikiTree) .
+                            $self->{outputString} .  $self->_footer;
+
+    return $self->{outputString};
 }
 
-# private
+sub linkPost {
+    my ($self, $nodeRef) = @_;
+    if ($self->{showLinks}) {
+        push @{$self->{links}}, $nodeRef->href;
+        $self->{linksIndex}++;
+        $self->{outputString} .= '[' . ($self->{linksIndex} - 1) . ']';
+    }
+}
+
+
+############### Private Methods ###############
+
+sub _structuralContent {
+    my ($self, $nodeRef) = @_;
+
+    if ($nodeRef->content) {
+        my $tmp = $self->{outputString};
+        $self->{outputString} = "";
+        $self->traverse($nodeRef->content);
+        my $nodeString = $self->{outputString};
+        $self->{outputString} = $tmp;
+        if ($nodeRef->type eq 'li') {
+            if ($self->{listType} eq 'ul') {
+                $nodeString = "* $nodeString";
+            }
+            elsif ($self->{listType} eq 'ol') {
+                $nodeString = $self->{listNumber}.". $nodeString";
+                $self->{listNumber}++;
+            }
+        }
+        if ($nodeRef->type eq 'pre') {
+            $self->{outputString} .= &Text::Wrap::wrap($self->{initialIndent},
+                                     $self->{subsequentIndent},
+                                     $nodeString);
+        } else {
+            $self->{outputString} .= &Text::Wrap::fill($self->{initialIndent},
+                                     $self->{subsequentIndent},
+                                     $nodeString);
+        }
+    }
+}
 
 sub _header {
-    my ($wikiTree, %params) = @_;
-    my $outputString;
+    my ($self, $wikiTree) = @_;
+    my $header = "";
 
-    $outputString = &_center($wikiTree->title, $params{columns})
-        if ($wikiTree->title);
-    $outputString .= &_center($wikiTree->subtitle, $params{columns})
-        if ($wikiTree->subtitle);
-    $outputString .= &_center($wikiTree->id, $params{columns})
-        if ($wikiTree->id);
-    $outputString .= &_center($wikiTree->date, $params{columns})
-        if ($wikiTree->date);
-    $outputString .= &_center($wikiTree->version, $params{columns})
-        if ($wikiTree->version);
-    return $outputString . "\n";
+    $header .= $self->_center($wikiTree->title, $self->{columns});
+    $header .= $self->_center($wikiTree->subtitle, $self->{columns});
+    $header .= $self->_center($wikiTree->id, $self->{columns});
+    $header .= $self->_center($wikiTree->date, $self->{columns});
+    $header .= $self->_center($wikiTree->version, $self->{columns});
+
+    return $header."\n";
 }
 
 sub _footer {
-    my $outputString;
+    my $self = shift;
+    my $footer = "";
 
-    if ($showLinks) {  # check for links
-        if (scalar @links > 0) {
-            $outputString = "\n\n";
-            $outputString .= "LINK REFERENCES\n\n";
-            $linksIndex = 1;
-            foreach my $link (@links) {
-                $outputString .= "    [$linksIndex] $link\n";
-                $linksIndex++;
+    if ($self->{showLinks}) {  # check for links
+        if (scalar @{$self->{links}} > 0) {
+            $footer = "\n\n";
+            $footer .= "LINK REFERENCES\n\n";
+            $self->{linksIndex} = 1;
+            foreach my $link (@{$self->{links}}) {
+                $footer .= "    [".$self->{linksIndex}."] $link\n";
+                $self->{linksIndex}++;
             }
         }
     }
-    return $outputString;
+
+    return $footer;
 }
 
 sub _center {
-    my ($outputString, $columns) = @_;
+    my ($self, $string, $columns) = @_;
     my $padding;
 
-    if (length $outputString > $columns) {
-        return $outputString . "\n";
-    }
-    else {
-        $padding = ($columns - length $outputString) / 2;
-        return ' ' x $padding . $outputString . "\n";
-    }
-}
+    return "" if not $string;
 
+    if (length $string > $columns) {
+        return $string . "\n";
+    }
+
+    $padding = ($columns - length $string) / 2;
+    return ' 'x$padding . $string. "\n";
+}
 1;
 __END__
 
 =head1 NAME
 
-PurpleWiki::View::text - Plain text view driver
+PurpleWiki::View::text - View Driver used for Text Output.
+
+=head1 DESCRIPTION
+
+Prints out a text view of a PurpleWiki::Tree.
+
+=head1 OBJECT STATE
+
+=head2 outputString 
+
+This contains the current working copy of the text that is ultimately returned
+by view().
+
+=head1 METHODS
+
+=head2 new(config => $config, show_links => true/false, columns => $columns)
+
+Returns a new PurpleWiki::View::text object  If config is not passed in then a
+fatal error occurs.  show_links and columns are not required and default to
+true and 72 respectively.  show_links can also be written as showLinks.
+
+If show_links is true then links are marked with "[n]" style references, where
+n is an integer.  At the bottom of the output the references show what 
+URLs the links were pointing at.
+
+columns is the number of columns to make the text output fit into.
+
+=head2 view($wikiTree)
+
+Returns the output as a string of text.
 
 =head1 AUTHORS
+
+Matthew O'Connor, E<lt>matthew@canonical.orgE<gt>
 
 Chris Dent, E<lt>cdent@blueoxen.orgE<gt>
 
@@ -307,6 +211,6 @@ Eugene Eric Kim, E<lt>eekim@blueoxen.orgE<gt>
 
 =head1 SEE ALSO
 
-L<PurpleWiki::View::EventHandler>.
+L<PurpleWiki::View::Driver>
 
 =cut

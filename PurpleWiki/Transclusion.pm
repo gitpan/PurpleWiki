@@ -1,7 +1,7 @@
 # PurpleWiki::Transclusion.pm
 # vi:ai:sw=4:ts=4:et:sm
 #
-# $Id: Transclusion.pm,v 1.11 2004/02/12 18:22:42 cdent Exp $
+# $Id: Transclusion.pm,v 1.12 2004/02/16 21:58:21 cdent Exp $
 #
 # Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
 #
@@ -34,9 +34,10 @@ use strict;
 use DB_File;
 use LWP::UserAgent;
 use PurpleWiki::Sequence;
+use PurpleWiki::Parser::WikiText;
 
 use vars qw($VERSION);
-$VERSION = '0.9.1';
+$VERSION = '0.9.2';
 
 # The name of the index file. Its directory comes from Config.
 my $INDEX_FILE = 'sequence.index';
@@ -78,9 +79,7 @@ sub get {
     my $content;
 
     # get the URL that hosts this nid out of the the db
-    my $sequence = new PurpleWiki::Sequence($self->{config}->DataDir(),
-        $self->{config}->RemoteSequence());
-    my $url = $sequence->getURL($nid); 
+    my $url = $self->getURL($nid);
 
     $content = "no URL for $nid" unless $url;
 
@@ -95,6 +94,22 @@ sub get {
         if ((($url =~ /$scriptName/) || ($url =~ /\.wiki$/)) &&
             ($url eq $self->{url})) {
             $content = q(Transclusion loop, please remove.);
+        } elsif ($url =~ $ENV{HTTP_HOST}  && $url =~ /$scriptName/) {
+            my ($pageName) = ($url =~ /\?(\w+)\b/);
+            my $page = new PurpleWiki::Database::Page(id => $pageName,
+                config => $self->{config});
+            my $parser = new PurpleWiki::Parser::WikiText;
+            if ($page->pageExists()) {
+                $page->openPage();
+                my $tree = $parser->parse($page->getText()->getText(),
+                             'add_node_ids' => 0,
+                             'config' => $self->{config});
+                $content = $tree->view('subtree', 
+                                       'config' => $self->{config},
+                                       'nid' => uc($nid));
+            } 
+            
+            $content = "transclusion index out of sync" if not $content;
         } else {
             # request the content of the URL 
             my $ua = new LWP::UserAgent(agent => ref($self));
@@ -122,12 +137,22 @@ sub get {
     }
 
     
-    if ($outputType !~ /plaintext/) {
+    if ($outputType !~ /plaintext/ and not ref($content)) {
         $content = qq(<span id="$nidLong" class="transclusion">) .
             qq($content&nbsp;<a class="nid" title="$nid" ) .
             qq(href="$url#$nidLong">T</a></span>);
     }
+
     return $content;
+}
+
+sub getURL {
+    my $self = shift;
+    my $nid = shift;
+
+    my $sequence = new PurpleWiki::Sequence($self->{config}->LocalSequenceDir(),
+        $self->{config}->RemoteSequenceURL());
+    return $sequence->getURL($nid); 
 }
 
 # Attaches to the the DB file which contains the NID:URL index
@@ -191,6 +216,10 @@ is returned.
 If the PurpleWiki::Config has defined httpUser and httpPass, that 
 information will be passed along with the HTTP request to authenticate.
 
+=head2 getURL($nid)
+
+Returns the URL associated with the NID. This can be useful for displaying
+the URL.
 
 =head1 AUTHORS
 

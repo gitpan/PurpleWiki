@@ -1,9 +1,8 @@
 # PurpleWiki::View::xhtml.pm
-# vi:ai:sm:et:sw=4:ts=4
 #
-# $Id: xhtml.pm,v 1.6 2004/01/26 00:34:47 cdent Exp $
+# $Id$
 #
-# Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
+# Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
 # This file is part of PurpleWiki.  PurpleWiki is derived from:
 #
@@ -29,32 +28,41 @@
 #    Boston, MA 02111-1307 USA
 
 package PurpleWiki::View::xhtml;
-
 use 5.005;
 use strict;
-use PurpleWiki::Page;
-use PurpleWiki::Tree;
-use PurpleWiki::View::EventHandler;
+use warnings;
+use PurpleWiki::View::Driver;
 use PurpleWiki::View::wikihtml;
 
-use vars qw($VERSION);
-$VERSION = '0.9.1';
+############### Package Globals ###############
 
-# functions
+our $VERSION = '0.9.2';
+
+# Note that we don't inherit directly from Driver.pm like the other drivers.
+our @ISA = qw(PurpleWiki::View::wikihtml); 
+
+
+############### Overloaded Methods ###############
 
 sub view {
-    my ($wikiTree, %params) = @_;
+    my ($self, $wikiTree) = @_;
 
-    &PurpleWiki::View::wikihtml::registerHandlers;
-    return &_htmlHeader($wikiTree, %params) .
-        &PurpleWiki::View::EventHandler::view($wikiTree, %params) .
-        &_htmlFooter;
+    if (not defined $self->{css_file}) {
+        $self->{css_file} = "";
+    }
+
+    $self->SUPER::view($wikiTree);
+    $self->{outputString} = $self->_htmlHeader($wikiTree) .
+                            $self->{outputString} . $self->_htmlFooter();
+
+    return $self->{outputString};
 }
 
-# private
+
+############### Private Methods ###############
 
 sub _htmlHeader {
-    my ($wikiTree, %params) = @_;
+    my ($self, $wikiTree) = @_;
     my $outputString;
 
     $outputString = qq(<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 ) .
@@ -64,9 +72,9 @@ sub _htmlHeader {
        qq(<head>\n);
     $outputString .= '<title>' . $wikiTree->title . "</title>\n"
         if ($wikiTree->title);
-    if ($params{css_file}) {
+    if ($self->{css_file}) {
         $outputString .= '<link rel="stylesheet" href="';
-        $outputString .= $params{css_file};
+        $outputString .= $self->{css_file};
         $outputString .= '" type="text/css" />' . "\n";
     }
     $outputString .= "</head>\n<body>\n";
@@ -113,15 +121,40 @@ sub _htmlHeader {
 sub _htmlFooter {
     return "</body>\n</html>\n";
 }
-
 1;
 __END__
 
 =head1 NAME
 
-PurpleWiki::View::xhtml - XHTML view driver
+PurpleWiki::View::wikihtml - View Driver used for XHTML output.
+
+=head1 DESCRIPTION
+
+Converts a PurpleWiki::Tree into XHTML.  This object inherits from
+L<PurpleWiki::View::wikihtml>.
+
+=head1 METHODS
+
+=head2 new(config => $config, url => $url, pageName => $pageName, 
+           css_file => $CSS)
+
+Returns a new PurpleWiki::View::xhtml object  If config is not passed in
+then a fatal error occurs.  
+
+url is the URL prepended to NIDs, defaults to the empty string. 
+
+pageName is the pageName used by sketch nodes for the SVG stuff, it defaults
+to the empty string.
+
+css_file is the name of the CSS file to use, defaults to the empty string.
+
+=head2 view($wikiTree)
+
+Returns the output as a string of valid XHTML.
 
 =head1 AUTHORS
+
+Matthew O'Connor, E<lt>matthew@canonical.orgE<gt>
 
 Chris Dent, E<lt>cdent@blueoxen.orgE<gt>
 
@@ -129,6 +162,6 @@ Eugene Eric Kim, E<lt>eekim@blueoxen.orgE<gt>
 
 =head1 SEE ALSO
 
-L<PurpleWiki::View::EventHandler>.
+L<PurpleWiki::View::Driver>, L<PurpleWiki::View::wikihtml>
 
 =cut

@@ -30,7 +30,6 @@
 
 package PurpleWiki::Apache1Handler;
 
-use lib '/home/cjdent/src/PurpleWiki/';
 use strict;
 use IO::File;
 use PurpleWiki::Config;
@@ -39,7 +38,7 @@ use Apache;
 use Apache::Constants;
 use Apache::URI;
 use vars qw($VERSION);
-$VERSION = '0.9.1';
+$VERSION = '0.9.2';
 
 my $CONFIG = '/home/kb-dev/wikidata';
 my $CSS = '/css/purple.css';
@@ -47,7 +46,7 @@ my $CSS = '/css/purple.css';
 sub handler {
     my $r = shift;
 
-    print $r->send_http_header("text/html"); 
+    $r->send_http_header("text/html"); 
 
     my $file = $r->filename();
     my $url = Apache::URI->parse($r)->unparse();
@@ -62,12 +61,12 @@ sub handler {
         url => $url,
     );
 
-    print $wiki->view('xhtml', 
+    $r->print($wiki->view('xhtml', 
         config => $purpleConfig,
         wikiword => 1,
         css_file => $CSS,
         url => $url,
-    );
+    ));
 
     return OK;
 
