@@ -1,6 +1,6 @@
 # PurpleWiki::Search::Blosxom.pm
 #
-# $Id: Blosxom.pm,v 1.4 2004/01/21 23:24:08 cdent Exp $
+# $Id: Blosxom.pm 364 2004-05-19 18:15:26Z eekim $
 #
 # Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
@@ -34,8 +34,8 @@ use base 'PurpleWiki::Search::Interface';
 use PurpleWiki::Search::Result;
 use IO::File;
 
-use vars qw($VERSION);
-$VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Blosxom.pm 364 2004-05-19 18:15:26Z eekim $ =~ /\s(\d+)\s/);
 
 my $ENTRIES_CACHE_INDEX = '/home/eekim/www/local/blosxom/plugins/state/.entries_cache.index';
 my $DATA_DIR = '/home/eekim/writing/blog/eekim.com';
@@ -63,9 +63,9 @@ sub search {
         my ($title, $body) = &_parseBlosxomFile($file);
         if ($title =~ /$query/i || $body =~ /$query/i) {
             my $result = new PurpleWiki::Search::Result;
-            $result->setTitle($title);
-            $result->setModifiedTime($files{$file});
-            $result->setURL(&_fileToUrl($file, $files{$file}));
+            $result->title($title);
+            $result->modifiedTime($files{$file});
+            $result->url(&_fileToUrl($file, $files{$file}));
             push @results, $result;
         }
     }

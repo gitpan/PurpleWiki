@@ -1,7 +1,7 @@
 # PurpleWiki::Transclusion.pm
 # vi:ai:sw=4:ts=4:et:sm
 #
-# $Id: Transclusion.pm,v 1.12 2004/02/16 21:58:21 cdent Exp $
+# $Id: Transclusion.pm 397 2004-06-16 19:01:10Z cdent $
 #
 # Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
 #
@@ -33,11 +33,12 @@ package PurpleWiki::Transclusion;
 use strict;
 use DB_File;
 use LWP::UserAgent;
+use PurpleWiki::Config;
 use PurpleWiki::Sequence;
 use PurpleWiki::Parser::WikiText;
 
-use vars qw($VERSION);
-$VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Transclusion.pm 397 2004-06-16 19:01:10Z cdent $ =~ /\s(\d+)\s/);
 
 # The name of the index file. Its directory comes from Config.
 my $INDEX_FILE = 'sequence.index';
@@ -57,7 +58,7 @@ sub new {
     bless ($self, $class);
     my %params = @_; 
 
-    $self->{config} = $params{config};
+    $self->{config} = PurpleWiki::Config->instance();
     $self->{url} = $params{url};
     $self->{outputType} = $params{outputType};
 
@@ -95,17 +96,14 @@ sub get {
             ($url eq $self->{url})) {
             $content = q(Transclusion loop, please remove.);
         } elsif ($url =~ $ENV{HTTP_HOST}  && $url =~ /$scriptName/) {
-            my ($pageName) = ($url =~ /\?(\w+)\b/);
-            my $page = new PurpleWiki::Database::Page(id => $pageName,
-                config => $self->{config});
+            my ($pageName) = ($url =~ /\?([^&]+)\b/);
+            my $page = new PurpleWiki::Database::Page(id => $pageName);
             my $parser = new PurpleWiki::Parser::WikiText;
             if ($page->pageExists()) {
                 $page->openPage();
                 my $tree = $parser->parse($page->getText()->getText(),
-                             'add_node_ids' => 0,
-                             'config' => $self->{config});
+                             'add_node_ids' => 0);
                 $content = $tree->view('subtree', 
-                                       'config' => $self->{config},
                                        'nid' => uc($nid));
             } 
             
@@ -178,7 +176,6 @@ PurpleWiki::Transclusion - Transclusion object.
 
   my $config = PurpleWiki::Config->new('/var/www/wikidb');
   my $transclusion = PurpleWiki::Transclusion->new(
-     config => $config,
      url => 'http://purplewiki.blueoxen.net/cgi-bin/wiki.pl?HomePage',
      ouput_type => 'plaintext');
 
@@ -198,8 +195,6 @@ these features allow.
 Creates a new Transclusion object. See get() for more.
 
 There are three parameters:
-
-       config -- PurpleWiki::Config object
 
           url -- The URL requesting the transclusion
 

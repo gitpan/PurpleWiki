@@ -1,7 +1,7 @@
 # PurpleWiki::Search::Engine.pm
 # vi:ai:sm:et:sw=4:ts=4
 #
-# $Id: Engine.pm,v 1.7 2004/01/21 23:24:08 cdent Exp $
+# $Id: Engine.pm 366 2004-05-19 19:22:17Z eekim $
 #
 # Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
@@ -33,8 +33,8 @@ package PurpleWiki::Search::Engine;
 use strict;
 use PurpleWiki::Search::Result;
 
-use vars qw($VERSION);
-$VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Engine.pm 366 2004-05-19 19:22:17Z eekim $ =~ /\s(\d+)\s/);
 
 sub new {
     my $class = shift;
@@ -44,7 +44,7 @@ sub new {
 
     my %params = @_;
 
-    $self->{config} = $params{config};
+    $self->{config} = PurpleWiki::Config->instance();
 
     $self->{modules} = $self->{config}->SearchModule;
 
@@ -59,7 +59,7 @@ sub search {
         my $class = "PurpleWiki::Search::$module";
         eval "require $class";
 
-        my $searcher = $class->new(config => $self->config());
+        my $searcher = $class->new();
 
         $self->{results}{$module} = [ $searcher->search($query) ];
     }
@@ -67,64 +67,12 @@ sub search {
     return $self;
 }
 
-# string asHTML
-sub asHTML {
-    my $self = shift;
-
-    my $string;
-
-    $string .= '<ul>';
-    foreach my $module (@{$self->{modules}}) {
-        $string .= qq(<li><a href="#$module">$module</a></li>\n);
-    }
-    $string .= '</ul>';
-
-    foreach my $module (@{$self->{modules}}) {
-        $string .= qq(<h2><a name="$module">$module</a></h2>\n);
-
-        foreach my $result (@{$self->{results}{$module}}) {
-            my $url = $result->getURL;
-            my $title = $result->getTitle;
-            my $summary = $result->getSummary;
-            my $mtime = $result->getModifiedTime;
-
-            # deal with null titles
-            $title = $url unless $title;
-
-            $string .= qq{<p class="searchresult"><a href="$url">$title</a>};
-            $string .= ' -- <i>' . &_date($mtime) . '</i>' if ($mtime);
-            $string .=<<"EOT";
-<br />
-$summary</p>
-EOT
-        }
-        $string .= "\n";
-    }
-
-    return $string;
+sub modules {
+    return \@{shift->{modules}};
 }
 
-sub _date {
-    my $ts = shift;
-    my @datetime = localtime($ts);
-    my %monthNames = (
-        0 => 'Jan',
-        1 => 'Feb',
-        2 => 'Mar',
-        3 => 'Apr',
-        4 => 'May',
-        5 => 'Jun',
-        6 => 'Jul',
-        7 => 'Aug',
-        8 => 'Sep',
-        9 => 'Oct',
-        10 => 'Nov',
-        11 => 'Dec');
-    my $year = 1900 + $datetime[5];
-    my $month = $monthNames{$datetime[4]};
-    my $day = $datetime[3];
-
-    return "$month $day, $year";
+sub results {
+    return \%{shift->{results}};
 }
 
 sub config {
@@ -174,11 +122,9 @@ object is required.
 
 =over 4
 
-=item new(config => PurpleWiki::Config)
+=item new()
 
-Creates a new PurpleWiki::Search::Engine. Uses the passed in
-PurpleWiki::Config object to determine which modules are to
-be used in the search() method.
+Creates a new PurpleWiki::Search::Engine.
 
 =item search($query)
 

@@ -1,6 +1,6 @@
 # PurpleWiki::View::Driver.pm
 #
-# $Id$
+# $Id: Driver.pm 366 2004-05-19 19:22:17Z eekim $
 #
 # Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
@@ -32,11 +32,13 @@ use 5.005;
 use strict;
 use warnings;
 use Carp;
+use PurpleWiki::Config;
 use PurpleWiki::Tree;
 
 ######## Package Globals ########
 
-our $VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Driver.pm 366 2004-05-19 19:22:17Z eekim $ =~ /\s(\d+)\s/);
 
 # This probably belongs in StructuralNode.pm
 our @structuralNodeTypes = qw(document section indent ul ol dl h p li dd dt 
@@ -56,15 +58,15 @@ our %lookupTable = map { $_ => 1 } @allNodeTypes;
 
 ######## Public Methods ########
 
-# Create a new driver.  The only required parameter is a config => config obj.
-# which gives us access to the PurpleWiki::Config object.
+# Create a new driver.
 sub new {
     my $proto = shift;
     my $self = { @_ };
     my $class = ref($proto) || $proto;
 
-    # Make sure we were given a PurpleWiki::Config object.
-    croak "PurpleWiki::Config object not found\n" unless $self->{config};
+    # Make sure we have a PurpleWiki::Config object.
+    $self->{config} = PurpleWiki::Config->instance();
+    croak "PurpleWiki::Config object not found" unless $self->{config};
 
     # Object state.
     $self->{depth} = 0;
@@ -336,10 +338,10 @@ for overloading.  In addition to these all of the methods generated via the
 B<AUTOLOAD> function are also availble for overloading.  The functions defined
 via B<AUTOLOAD> are talked about in the B<DESCRIPTION> section.
 
-=head2 new(config => $config)
+=head2 new()
 
-Returns a new PurpleWiki::View::Driver().  If config is not passed in then a
-fatal error occurs.  The state variable depth is set to 0 at this point.
+Returns a new PurpleWiki::View::Driver().  The state variable depth is set to 0
+at this point.
 
 =head2 view($wikiTree)
 

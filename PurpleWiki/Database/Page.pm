@@ -1,7 +1,7 @@
 # PurpleWiki::Database::Page
 # vi:sw=4:ts=4:ai:sm:et:tw=0
 #
-# $Id: Page.pm,v 1.5 2004/01/21 23:24:08 cdent Exp $
+# $Id: Page.pm 428 2004-07-26 00:46:41Z cdent $
 #
 # Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
 #
@@ -32,15 +32,16 @@ package PurpleWiki::Database::Page;
 
 # PurpleWiki Page Data Access
 
-# $Id: Page.pm,v 1.5 2004/01/21 23:24:08 cdent Exp $
+# $Id: Page.pm 428 2004-07-26 00:46:41Z cdent $
 
 use strict;
+use PurpleWiki::Config;
 use PurpleWiki::Database;
 use PurpleWiki::Database::Section;
 use PurpleWiki::Database::Text;
 
-use vars qw($VERSION);
-$VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Page.pm 428 2004-07-26 00:46:41Z cdent $ =~ /\s(\d+)\s/);
 
 # defaults for Text Based data structure
 my $DATA_VERSION = 3;            # the data format version
@@ -55,6 +56,7 @@ sub new {
     my $class = ref($proto) || $proto;
     my %args = @_;
     my $self = { %args };
+    $self->{config} = PurpleWiki::Config->instance();
     bless ($self, $class);
     return $self;
 }
@@ -165,8 +167,7 @@ sub getSection {
             new PurpleWiki::Database::Section('data' => $self->{text_default},
                                               'now' => $self->getNow(),
                                               'userID' => $self->{userID},
-                                              'username' => $self->{username},
-                                              'config' => $self->{config});
+                                              'username' => $self->{username});
         return $self->{text_default};
     }
 }
@@ -299,7 +300,7 @@ sub serialize {
 
     my $separator = $self->{config}->FS1;
 
-    my $data = join($separator, map {$_ . $separator . $self->{$_}} 
+    my $data = join($separator, map {$_ . $separator . ($self->{$_} || '')} 
         ('version', 'revision', 'cache_oldmajor', 'cache_oldauthor',
          'cache_diff_default_major', 'cache_diff_default_minor',
          'ts_create', 'ts'));

@@ -1,6 +1,6 @@
 # PurpleWiki::View::xhtml.pm
 #
-# $Id$
+# $Id: xhtml.pm 366 2004-05-19 19:22:17Z eekim $
 #
 # Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
@@ -36,7 +36,8 @@ use PurpleWiki::View::wikihtml;
 
 ############### Package Globals ###############
 
-our $VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: xhtml.pm 366 2004-05-19 19:22:17Z eekim $ =~ /\s(\d+)\s/);
 
 # Note that we don't inherit directly from Driver.pm like the other drivers.
 our @ISA = qw(PurpleWiki::View::wikihtml); 
@@ -135,11 +136,9 @@ L<PurpleWiki::View::wikihtml>.
 
 =head1 METHODS
 
-=head2 new(config => $config, url => $url, pageName => $pageName, 
-           css_file => $CSS)
+=head2 new(url => $url, pageName => $pageName, css_file => $CSS)
 
-Returns a new PurpleWiki::View::xhtml object  If config is not passed in
-then a fatal error occurs.  
+Returns a new PurpleWiki::View::xhtml object.
 
 url is the URL prepended to NIDs, defaults to the empty string. 
 

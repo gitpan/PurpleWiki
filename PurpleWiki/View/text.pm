@@ -1,6 +1,6 @@
 # PurpleWiki::View::text.pm
 #
-# $Id$
+# $Id: text.pm 426 2004-07-25 23:44:24Z cdent $
 #
 # Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
@@ -36,7 +36,8 @@ use PurpleWiki::View::rawtext;
 
 ############### Package Globals ###############
 
-our $VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: text.pm 426 2004-07-25 23:44:24Z cdent $ =~ /\s(\d+)\s/);
 
 our @ISA = qw(PurpleWiki::View::rawtext);
 
@@ -109,11 +110,11 @@ sub _structuralContent {
             }
         }
         if ($nodeRef->type eq 'pre') {
-            $self->{outputString} .= &Text::Wrap::wrap($self->{initialIndent},
+            $self->{outputString} .= Text::Wrap::wrap($self->{initialIndent},
                                      $self->{subsequentIndent},
                                      $nodeString);
         } else {
-            $self->{outputString} .= &Text::Wrap::fill($self->{initialIndent},
+            $self->{outputString} .= Text::Wrap::fill($self->{initialIndent},
                                      $self->{subsequentIndent},
                                      $nodeString);
         }
@@ -185,11 +186,11 @@ by view().
 
 =head1 METHODS
 
-=head2 new(config => $config, show_links => true/false, columns => $columns)
+=head2 new(show_links => true/false, columns => $columns)
 
-Returns a new PurpleWiki::View::text object  If config is not passed in then a
-fatal error occurs.  show_links and columns are not required and default to
-true and 72 respectively.  show_links can also be written as showLinks.
+Returns a new PurpleWiki::View::text object.  show_links and columns are not
+required and default to true and 72 respectively.  show_links can also be
+written as showLinks.
 
 If show_links is true then links are marked with "[n]" style references, where
 n is an integer.  At the bottom of the output the references show what 

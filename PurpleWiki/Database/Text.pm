@@ -1,7 +1,7 @@
 # PurpleWiki::Database::Text
 # vi:sw=4:ts=4:ai:sm:et:tw=0
 #
-# $Id: Text.pm,v 1.5 2004/01/21 23:24:08 cdent Exp $
+# $Id: Text.pm 366 2004-05-19 19:22:17Z eekim $
 #
 # Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
 #
@@ -32,12 +32,13 @@ package PurpleWiki::Database::Text;
 
 # PurpleWiki Text Data Access
 
-# $Id: Text.pm,v 1.5 2004/01/21 23:24:08 cdent Exp $
+# $Id: Text.pm 366 2004-05-19 19:22:17Z eekim $
 
 use strict;
+use PurpleWiki::Config;
 
-use vars qw($VERSION);
-$VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Text.pm 366 2004-05-19 19:22:17Z eekim $ =~ /\s(\d+)\s/);
 
 # Creates a new Text. A text represents the actual
 # use visible and editable text of a WikiPage.  It
@@ -48,7 +49,7 @@ sub new {
     my $class = ref($proto) || $proto;
     my $self = {};
     $self->{data} = $params{data};
-    $self->{config} = $params{config};
+    $self->{config} = PurpleWiki::Config->instance();
     bless ($self, $class);
 
     $self->_init();

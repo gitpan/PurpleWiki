@@ -1,6 +1,6 @@
 # PurpleWiki::View::wikitext.pm
 #
-# $Id$
+# $Id: wikitext.pm 381 2004-05-31 19:21:37Z eekim $
 #
 # Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
@@ -36,7 +36,8 @@ use PurpleWiki::View::Driver;
 
 ############### Package Globals ###############
 
-our $VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: wikitext.pm 381 2004-05-31 19:21:37Z eekim $ =~ /\s(\d+)\s/);
 
 our @ISA = qw(PurpleWiki::View::Driver);
 
@@ -220,9 +221,17 @@ sub ddMain { shift->_liRecurse(@_) }
 
 sub dtPost { shift->_showNID(@_) }
 
-sub prePre { shift->_hardRule(0) }
+sub prePre {
+    my $self = shift;
+    $self->_hardRule(0);
+    $self->{outputString} .= "{{{\n";
+ }
 
-sub prePost { shift->_showNID(@_) }
+sub prePost {
+    my $self = shift;
+    $self->_showNID(@_);
+    $self->{outputString} .= "}}}\n\n";
+}
 
 sub sketchMain { 
     shift->{outputString} .= "{sketch}\n\n";
@@ -249,13 +258,13 @@ sub iPost {
 }
 
 sub ttPre { 
-    shift->{outputString} .= "<tt>";
+    shift->{outputString} .= "{{{";
 }
 
 sub ttPost { 
     my $self = shift;
     $self->{lastInlineProcessed} = 'tt'; 
-    $self->{outputString} .=  "</tt>"; 
+    $self->{outputString} .=  "}}}"; 
 }
 
 sub textPre { 
@@ -376,8 +385,8 @@ sub _showNID {
 
     if ($nodeRef->type eq 'dt') {
         $self->{outputString} .= $nidString;
-    } elsif ($nodeRef->type eq 'pre') {
-        $self->{outputString} .= $nidString . "\n\n";
+#    } elsif ($nodeRef->type eq 'pre') {
+#        $self->{outputString} .= $nidString . "\n\n";
     } else {
         $self->{outputString} .= $nidString . "\n";
     }
@@ -449,10 +458,9 @@ by view().
 
 =head1 METHODS
 
-=head2 new(config => $config)
+=head2 new()
 
-Returns a new PurpleWiki::View::wikitext object  If config is not passed in
-then a fatal error occurs.  
+Returns a new PurpleWiki::View::wikihtml object.
 
 =head2 view($wikiTree)
 

@@ -1,7 +1,7 @@
 # PurpleWiki::Search::MovableType.pm
 # vi:ai:sm:et:sw=4:ts=4
 #
-# $Id: MovableType.pm,v 1.9 2004/01/21 23:24:08 cdent Exp $
+# $Id: MovableType.pm 364 2004-05-19 18:15:26Z eekim $
 #
 # Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
@@ -34,8 +34,8 @@ use strict;
 use base 'PurpleWiki::Search::Interface';
 use Time::Local;
 
-use vars qw($VERSION);
-$VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: MovableType.pm 364 2004-05-19 18:15:26Z eekim $ =~ /\s(\d+)\s/);
 
 # Where the searching is done.
 # Most of this taken from MT::App::Search
@@ -63,10 +63,10 @@ sub search {
         next unless ($includedBlogs{$blog_id});
         if ($self->_search_hit($query, $entry)) {
             my $result = new PurpleWiki::Search::Result();
-            $result->setTitle($entry->title);
-            $result->setURL($entry->permalink);
-            $result->setModifiedTime($self->_calculateModifiedTime($entry));
-            $result->setSummary(substr($entry->text, 0, 99) . '...');
+            $result->title($entry->title);
+            $result->url($entry->permalink);
+            $result->modifiedTime($self->_calculateModifiedTime($entry));
+            $result->summary(substr($entry->text, 0, 99) . '...');
             push(@results, $result);
         }
     }

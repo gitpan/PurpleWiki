@@ -1,7 +1,7 @@
 # PurpleWiki::Page.pm
 # vi:ai:sw=4:ts=4:et:sm
 #
-# $Id: Page.pm,v 1.16 2004/01/21 23:24:08 cdent Exp $
+# $Id: Page.pm 444 2004-08-05 08:14:37Z eekim $
 #
 # Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
 #
@@ -30,30 +30,32 @@
 
 package PurpleWiki::Page;
 
+use PurpleWiki::Config;
 use PurpleWiki::Database::Page;
 
 # mappings between PurpleWiki code and code within useMod
 
-# $Id: Page.pm,v 1.16 2004/01/21 23:24:08 cdent Exp $
+# $Id: Page.pm 444 2004-08-05 08:14:37Z eekim $
 
-use vars qw($MainPage $VERSION);
-$VERSION = '0.9.2';
+our $MainPage;
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Page.pm 444 2004-08-05 08:14:37Z eekim $ =~ /\s(\d+)\s/);
 
 sub exists {
     my $id = shift;
-    my $config = shift;
+    my $config = PurpleWiki::Config->instance();
 
     $id =~ s|^/|$MainPage/| if defined($MainPage);
     if ($config->FreeLinks) {
-        $id = &FreeToNormal($id, $config);
+        $id = FreeToNormal($id, $config);
     }
-    my $page = new PurpleWiki::Database::Page('id' => $id, config => $config);
+    my $page = new PurpleWiki::Database::Page('id' => $id);
     return $page->pageExists();
 }
 
 sub siteExists {
     my $site = shift;
-    my $config = shift;
+    my $config = PurpleWiki::Config->instance();
     my $status;
     my $data;
 
@@ -65,28 +67,25 @@ sub siteExists {
 
 sub getWikiWordLink {
     my $id = shift;
-    my $config = shift;
 
     my $results;
-    $results = &GetPageOrEditLink($id, '', $config);
+    $results = GetPageOrEditLink($id, '');
     return _makeURL($results);
 }
 
 sub getInterWikiLink {
     my $id = shift;
-    my $config = shift;
     
     my $results;
-    $results = (&InterPageLink($id, $config))[0];
+    $results = (InterPageLink($id, $config))[0];
     return $results ? _makeURL($results) : '';
 }
 
 sub getFreeLink {
     my $id = shift;
-    my $config = shift;
 
     my $results;
-    $results = (&GetPageOrEditLink($id, '', $config))[0];
+    $results = (GetPageOrEditLink($id, ''))[0];
     return _makeURL($results);
 }
 
@@ -97,8 +96,9 @@ sub _makeURL {
 
 # FIXME: this is hackery 
 sub GetPageOrEditLink {
-  my ($id, $name, $config) = @_;
+  my ($id, $name) = @_;
   my (@temp);
+  my $config = PurpleWiki::Config->instance();
 
   if ($name eq "") {
     $name = $id;
@@ -110,25 +110,26 @@ sub GetPageOrEditLink {
   # the / is there but MainPage is not set.
   $id =~ s|^/|$MainPage/| if defined($MainPage);
   if ($config->FreeLinks) {
-    $id = &FreeToNormal($id, $config);
+    $id = FreeToNormal($id);
   }
-  my $page = new PurpleWiki::Database::Page('id' => $id, 'config' => $config);
+  my $page = new PurpleWiki::Database::Page('id' => $id);
   if ($page->pageExists()) {      # Page file exists
-    return &GetPageLinkText($id, $name, $config);
+    return GetPageLinkText($id, $name);
   }
   if ($config->FreeLinks) {
     if ($name =~ m| |) {  # Not a single word
       $name = "[$name]";  # Add brackets so boundaries are obvious
     }
   }
-  return $name . &GetEditLink($id, "?", $config);
+  return $name . GetEditLink($id, "?");
 }
 
 sub FreeToNormal {
   my $id = shift;
-  my $config = shift;
+  my $config = PurpleWiki::Config->instance();
 
   $id =~ s/ /_/g;
+  $id =~ s/[\r\n]/_/g;
   $id = ucfirst($id);
   if (index($id, '_') > -1) {  # Quick check for any space/underscores
     $id =~ s/__+/_/g;
@@ -149,54 +150,47 @@ sub FreeToNormal {
 }
 
 sub GetPageLinkText {
-  my ($id, $name, $config) = @_;
+  my ($id, $name) = @_;
+  my $config = PurpleWiki::Config->instance();
 
   # FIXME: this is not right. There are times when 
   # the / is there but MainPage is not set.
   $id =~ s|^/|$MainPage/| if defined($MainPage);
   if ($config->FreeLinks) {
-    $id = &FreeToNormal($id, $config);
+    $id = FreeToNormal($id);
     $name =~ s/_/ /g;
   }
-  return &ScriptLink($id, $name, $config);
+  return ScriptLink($id, $name);
 }
 
 sub ScriptLink {
-  my ($action, $text, $config) = @_;
+  my ($action, $text) = @_;
+  my $config = PurpleWiki::Config->instance();
 
-  my $baseUrl;
   my $scriptName = $config->ScriptName;
-  my $siteBase = $config->SiteBase;
-  if ($siteBase) {
-      $scriptName =~ s/^\///;
-      $siteBase =~ s/\/$//;
-      $baseUrl = "$siteBase/$scriptName";
-  }
-  else {
-      $baseUrl = $scriptName;
-  }
-  return "<a href=\"$baseUrl?$action\">$text</a>";
+  return "<a href=\"$scriptName?$action\">$text</a>";
 }
 
 sub GetEditLink {
-  my ($id, $name, $config) = @_;
+  my ($id, $name) = @_;
+  my $config = PurpleWiki::Config->instance();
 
   if ($config->FreeLinks) {
-    $id = &FreeToNormal($id, $config);
+    $id = FreeToNormal($id);
     $name =~ s/_/ /g;
   }
-  return &ScriptLink("action=edit&id=$id", $name, $config);
+  return ScriptLink("action=edit&amp;id=$id", $name);
 }
 
 sub InterPageLink {
-    my ($id, $config) = @_;
+    my ($id) = @_;
     my ($name, $site, $remotePage, $url, $punct);
 
-    ($id, $punct) = &SplitUrlPunct($id);
+    ($id, $punct) = SplitUrlPunct($id);
 
     $name = $id;
     ($site, $remotePage) = split(/:/, $id, 2);
-    $url = siteExists($site, $config);
+    $url = siteExists($site);
     return ("", $id . $punct)  if ($url eq "");
     $remotePage =~ s/&amp;/&/g;  # Unquote common URL HTML
     $url .= $remotePage;

@@ -1,6 +1,6 @@
 # PurpleWiki::View::Filter.pm
 #
-# $Id$
+# $Id: Filter.pm 366 2004-05-19 19:22:17Z eekim $
 #
 # Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
@@ -36,7 +36,8 @@ use PurpleWiki::View::Driver;
 
 ######## Package Globals ########
 
-our $VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Filter.pm 366 2004-05-19 19:22:17Z eekim $ =~ /\s(\d+)\s/);
 
 our @ISA = qw(PurpleWiki::View::Driver);
 
@@ -122,17 +123,15 @@ PurpleWiki::View::Filter - A Quick Access View Filter.
 
     my $config = new PurpleWiki::Config('/path/to/wikidb');
     my $parser = new PurpleWiki::Parser::WikiText;
-    my $filter = new PurpleWiki::View::Filter(config => $config);
+    my $filter = new PurpleWiki::View::Filter();
 
-    my $page = new PurpleWiki::Database::Page(id => $pageName, 
-                                              config => $config);
+    my $page = new PurpleWiki::Database::Page(id => $pageName);
+                                              
 
     die "$page does not exist!\n" if not $page->pageExists();
     $page->openPage();
 
-    my $tree = $parser->parse($page->getText()->getText(), 
-                              'add_node_ids' => 0,
-                              'config' => $config);
+    my $tree = $parser->parse($page->getText()->getText(), 'add_node_ids'=>0);
 
     $filter->setFilter(imageMain => sub {print shift->content."\n"});
     $filter->process($tree);
@@ -146,11 +145,10 @@ call for it.
 
 =head1 METHODS
 
-=head2 new(config => $config, useOO => $boolean, start => $subRef, 
-           stop => $subRef, methodName => $subRef, ...)
+=head2 new(useOO => $boolean, start => $subRef, stop => $subRef, methodName =>
+           $subRef, ...)
 
-Returns a new PurpleWiki::View::Filter object.  $config is the standard
-PurpleWiki::Config object. 
+Returns a new PurpleWiki::View::Filter object.
 
 useOO is a boolean variable, if it's true then the subroutines are called with
 $self as their first argument, otherwise they're called like normal functions.

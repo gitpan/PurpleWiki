@@ -3,7 +3,7 @@
 #
 # wiki.pl - PurpleWiki
 #
-# $Id: wiki.pl,v 1.14 2004/02/07 02:20:57 cdent Exp $
+# $Id: wiki.pl 464 2004-08-09 01:38:51Z cdent $
 #
 # Copyright (c) Blue Oxen Associates 2002.  All rights reserved.
 #
@@ -32,54 +32,72 @@
 
 package UseModWiki;
 use strict;
-use PurpleWiki::Parser::WikiText;
+use CGI;
+use CGI::Carp qw(fatalsToBrowser);
+use CGI::Session;
+use Digest::MD5;
+use PurpleWiki::ACL;
 use PurpleWiki::Config;
 use PurpleWiki::Database;
 use PurpleWiki::Database::Page;
-use PurpleWiki::Database::User;
 use PurpleWiki::Database::KeptRevision;
+use PurpleWiki::Database::User::UseMod;
+use PurpleWiki::Parser::WikiText;
 use PurpleWiki::Search::Engine;
-use CGI;
-use CGI::Carp qw(fatalsToBrowser);
 
 my $CONFIG_DIR='/var/www/wikidb';
 
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: wiki.pl 464 2004-08-09 01:38:51Z cdent $ =~ /\s(\d+)\s/);
+
 local $| = 1;  # Do not buffer output (localized for mod_perl)
 
-my $ScriptName;         # the name by which this script is called
-my $wikiParser;         # the reference to the PurpleWiki Parser
-my $config;             # our PurpleWiki::Config reference
 my $InterSiteInit = 0;
 my %InterSite;
 my $user;               # our reference to the logged in user
-my %UserCookie;         # The cookie received from the user
-my %SetCookie;          # The cookie to be sent to the user
-#my $MainPage;           # ?
+my $session;            # CGI::Session object
+my $visitedPagesCache;
+my $visitedPagesCacheSize = 7;
+
 my $q;                  # CGI query reference
 my $Now;                # The time at the beginning of the request
-my $UserID;             # UserID of the current session. FIXME: can we
-                        # get this off $user reliably?
+
 my $TimeZoneOffset;     # User's prefernce for timezone. FIXME: can we
                         # get this off $user reliably? Doesn't look
                         # worth it.
 
 # we only need one of each these per run
-$wikiParser = PurpleWiki::Parser::WikiText->new;
-$config = new PurpleWiki::Config($CONFIG_DIR);
+my $config = new PurpleWiki::Config($CONFIG_DIR);
+my $wikiParser = PurpleWiki::Parser::WikiText->new;
+# FIXME: would be cool if there were a way to factory these based off a
+#        config value.
+my $userDb = PurpleWiki::Database::User::UseMod->new;
+my $acl = PurpleWiki::ACL->new;
+
+# Select and load a  template driver
+my $templateDriver = $config->TemplateDriver();
+my $templateClass = "PurpleWiki::Template::$templateDriver";
+eval "require $templateClass";
+my $wikiTemplate = $templateClass->new;
+
+# check for i-names support
+if ($config->UseINames) {
+    require XDI::SPIT;
+}
 
 # Set our umask if one was put in the config file. - matthew
 umask(oct($config->Umask)) if defined $config->Umask;
 
 # The "main" program, called from the end of this script file.
 sub DoWikiRequest {
-  &InitRequest() or return;
+  InitRequest() or return;
 
   # Instantiate PurpleWiki parser.
 
-  if (!&DoBrowseRequest()) {
-    &DoOtherRequest();
+  if (not DoBrowseRequest()) {
+    DoOtherRequest();
   }
-
+  &logSession;
 }
 
 # == Common and cache-browsing code ====================================
@@ -90,39 +108,34 @@ sub InitRequest {
   $q = new CGI;
 
   $Now = time;                     # Reset in case script is persistent
-  $ScriptName = $q->url('relative' => 1);  # Name used in links
   $PurpleWiki::Page::MainPage = ".";  # For subpages only, the name of the top-level page
-  &PurpleWiki::Database::CreateDir($config->DataDir);  # Create directory if it doesn't exist
+  PurpleWiki::Database::CreateDir($config->DataDir);  # Create directory if it doesn't exist
   if (!-d $config->DataDir) {
-    &ReportError("Could not create " . $config->DataDir . "$!");
-    return 0;
+      $wikiTemplate->vars(&globalTemplateVars,
+                          dataDir => $config->DataDir);
+      print GetHttpHeader() . $wikiTemplate->process('errors/dataDirCannotCreate');
+      return 0;
   }
-  &InitCookie();         # Reads in user data
+  InitCookie();         # Reads in user data
   return 1;
 }
 
 sub InitCookie {
-  %SetCookie = ();
   $TimeZoneOffset = 0;
   undef $q->{'.cookies'};  # Clear cache if it exists (for SpeedyCGI)
-  %UserCookie = $q->cookie($config->CookieName);
-  $UserID = $UserCookie{'id'};
-  $UserID =~ s/\D//g;  # Numeric only
-  if ($UserID < 200) {
-    $UserID = 111;
-    $user = new PurpleWiki::Database::User('id' => $UserID, config => $config);
-  } else {
-    $user = new PurpleWiki::Database::User('id' => $UserID, config => $config);
-    if ($user->userExists()) {
-      if (($user->getID() != $UserCookie{'id'}) ||
-          ($user->getField('randkey') != $UserCookie{'randkey'})) {
-        $UserID = 113;
-      }
-    }
+
+  my $sid = $q->cookie($config->SiteName);
+  $session = CGI::Session->new("driver:File", $sid,
+                               {Directory => "$CONFIG_DIR/sessions"});
+  my $userId = $session->param('userId');
+  $user = $userDb->loadUser($userId) if ($userId);
+  $session->clear(['userId']) if (!$user);
+
+  if ($user && $user->tzOffset != 0) {
+    $TimeZoneOffset = $user->tzOffset * (60 * 60);
   }
-  if ($user->getField('tzoffset') != 0) {
-    $TimeZoneOffset = $user->getField('tzoffset') * (60 * 60);
-  }
+
+  $visitedPagesCache = $session->param('visitedPagesCache') || {};
 }
 
 sub DoBrowseRequest {
@@ -130,35 +143,35 @@ sub DoBrowseRequest {
   my $page;
 
   if (!$q->param) {             # No parameter
-    &BrowsePage($config->HomePage);
+    BrowsePage($config->HomePage);
     return 1;
   }
-  $id = &GetParam('keywords', '');
-  $page = new PurpleWiki::Database::Page('id' => $id, config => $config);
+  $id = GetParam('keywords', '');
+  $page = new PurpleWiki::Database::Page('id' => $id);
   if ($id) {                    # Just script?PageName
     if ($config->FreeLinks && (!$page->pageExists())) {
-      $id = &FreeToNormal($id);
+      $id = FreeToNormal($id);
     }
-    &BrowsePage($id)  if &ValidIdOrDie($id);
+    BrowsePage($id)  if ValidIdOrDie($id);
     return 1;
   }
-  $action = lc(&GetParam('action', ''));
-  $id = &GetParam('id', '');
-  $page = new PurpleWiki::Database::Page('id' => $id, config => $config);
+  $action = lc(GetParam('action', ''));
+  $id = GetParam('id', '');
+  $page = new PurpleWiki::Database::Page('id' => $id);
   if ($action eq 'browse') {
     if ($config->FreeLinks && (!$page->pageExists())) {
-      $id = &FreeToNormal($id);
+      $id = FreeToNormal($id);
     }
-    &BrowsePage($id)  if &ValidIdOrDie($id);
+    BrowsePage($id)  if ValidIdOrDie($id);
     return 1;
   } elsif ($action eq 'rc') {
-    &BrowsePage($config->RCName);
+    BrowsePage($config->RCName);
     return 1;
   } elsif ($action eq 'random') {
-    &DoRandom();
+    DoRandom();
     return 1;
   } elsif ($action eq 'history') {
-    &DoHistory($id)   if &ValidIdOrDie($id);
+    DoHistory($id)   if ValidIdOrDie($id);
     return 1;
   }
   return 0;  # Request not handled
@@ -166,23 +179,27 @@ sub DoBrowseRequest {
 
 sub BrowsePage {
   my $id = shift;
+  my $body;
   my ($fullHtml, $oldId, $allDiff, $showDiff, $openKept);
   my ($revision, $goodRevision, $diffRevision, $newText);
 
   my ($page, $section, $text, $keptRevision, $keptSection);
 
+  my ($userId, $username);
+  if ($user) {
+      $userId = $user->id;
+      $username= $user->username;
+  }
   $page = new PurpleWiki::Database::Page('id' => $id, 'now' => $Now,
-                                    'userID' => $UserID, 
-                                    'username' => GetParam("username", ""),
-                                    'config' => $config);
+                                    'userID' => $userId,
+                                    'username' => $username);
   $page->openPage();
   $section = $page->getSection();
   $text = $page->getText();
   $newText = $text->getText();
-  $keptRevision = new PurpleWiki::Database::KeptRevision(id => $id,
-      config => $config);
+  $keptRevision = new PurpleWiki::Database::KeptRevision(id => $id);
 
-  $revision = &GetParam('revision', '');
+  $revision = GetParam('revision', '');
   $revision =~ s/\D//g;           # Remove non-numeric chars
   $goodRevision = $revision;      # Non-blank only if exists
   if ($revision ne '') {
@@ -192,18 +209,18 @@ sub BrowsePage {
   }
   
   # Handle a single-level redirect
-  $oldId = &GetParam('oldid', '');
+  $oldId = GetParam('oldid', '');
   if (($oldId eq '') && (substr($text->getText(), 0, 10) eq '#REDIRECT ')) {
     $oldId = $id;
     if (($config->FreeLinks) && ($text->getText() =~ /\#REDIRECT\s+\[\[.+\]\]/)) {
       ($id) = ($text->getText() =~ /\#REDIRECT\s+\[\[(.+)\]\]/);
-      $id = &FreeToNormal($id);
+      $id = FreeToNormal($id);
     } else {
       ($id) = ($text->getText() =~ /\#REDIRECT\s+(\S+)/);
     }
-    if (&ValidId($id) eq '') {
+    if (ValidId($id) eq '') {
       # Later consider revision in rebrowse?
-      &ReBrowsePage($id, $oldId, 0);
+      ReBrowsePage($id, $oldId, 0);
       return;
     } else {  # Not a valid target, so continue as normal page
       $id = $oldId;
@@ -212,682 +229,240 @@ sub BrowsePage {
   }
   $PurpleWiki::Page::MainPage = $id;
   $PurpleWiki::Page::MainPage =~ s|/.*||;  # Only the main page name (remove subpage)
-  $fullHtml = &GetHeader($id, &QuoteHtml($id), $oldId);
 
   if ($revision ne '') {
     # Later maybe add edit time?
     if ($goodRevision ne '') {
-      $fullHtml .= '<b>' . "Showing revision $revision</b><br>";
       $text = $keptRevision->getRevision($revision)->getText();
-    } else {
-      $fullHtml .= '<b>' . "Revision $revision not available"
-                   . ' (' . 'showing current revision instead'
-                   . ')</b><br>';
     }
   }
-  $allDiff  = &GetParam('alldiff', 0);
+  $allDiff  = GetParam('alldiff', 0);
 
   if ($allDiff != 0) {
-    $allDiff = &GetParam('defaultdiff', 1);
+    $allDiff = GetParam('defaultdiff', 1);
   }
 
-  if (($id eq $config->RCName) && &GetParam('norcdiff', 1)) {
+  if (($id eq $config->RCName) && GetParam('norcdiff', 1)) {
     $allDiff = 0;  # Only show if specifically requested
   }
 
-  $showDiff = &GetParam('diff', $allDiff);
+  $showDiff = GetParam('diff', $allDiff);
+
+  my $pageName = $id;
+  if ($config->FreeLinks) {
+      $pageName =~ s/_/ /g;
+  }
+
+  my $lastEdited = TimeToText($section->getTS());
 
   if ($config->UseDiff && $showDiff) {
     $diffRevision = $goodRevision;
-    $diffRevision = &GetParam('diffrevision', $diffRevision);
+    $diffRevision = GetParam('diffrevision', $diffRevision);
 
-    $fullHtml .= &GetDiffHTML($page, $keptRevision, $showDiff, $id, $diffRevision, $newText);
-  }
-
-  $fullHtml .= &WikiToHTML($id, $text->getText());
-
-  $fullHtml .= "<hr>\n"  if (!&GetParam('embed', $config->EmbedWiki));
-  if ($id eq $config->RCName) {
-    print $fullHtml;
-    &DoRc();
-    print "<hr>\n"  if (!&GetParam('embed', $config->EmbedWiki));
-    print &GetFooterText($section, $id, $goodRevision);
+    DoDiff($page, $keptRevision, $showDiff, $id, $pageName, $lastEdited,
+            $diffRevision, $newText);
     return;
   }
-  $fullHtml .= &GetFooterText($section, $id, $goodRevision);
 
-  print $fullHtml;
+  $body = WikiToHTML($id, $text->getText());
 
-  return  if ($showDiff || ($revision ne ''));  # Don't cache special version
+  &updateVisitedPagesCache($id);
+  if ($id eq $config->RCName) {
+      DoRc($id, $pageName, $revision, $goodRevision, $lastEdited, $body);
+      return;
+  }
+  my @vPages = &visitedPages;
+  my $keywords = $id;
+  $keywords =~ s/_/\+/g if ($config->FreeLinks);
+  $wikiTemplate->vars(&globalTemplateVars,
+                      pageName => $pageName,
+                      expandedPageName => &expandPageName($pageName),
+                      visitedPages => \@vPages,
+                      showRevision => $revision,
+                      revision => $goodRevision,
+                      body => $body,
+                      lastEdited => $lastEdited,
+                      pageUrl => $config->ScriptName . "?$id",
+                      backlinksUrl => $config->ScriptName . "?search=$keywords",
+                      editUrl =>
+                        $config->ScriptName . "?action=edit&amp;id=$id",
+                      revisionsUrl =>
+                        $config->ScriptName . "?action=history&amp;id=$id",
+                      diffUrl =>
+                        $config->ScriptName .
+                        "?action=browse&amp;diff=1&amp;id=$id");
+  print GetHttpHeader() . $wikiTemplate->process('viewPage');
 }
 
 sub ReBrowsePage {
   my ($id, $oldId, $isEdit) = @_;
 
   if ($oldId ne "") {   # Target of #REDIRECT (loop breaking)
-    print &GetRedirectpage("action=browse&id=$id&oldid=$oldId",
+    print GetRedirectpage("action=browse&amp;id=$id&amp;oldid=$oldId",
                            $id, $isEdit);
   } else {
-    print &GetRedirectPage($id, $id, $isEdit);
+    print GetRedirectPage($id, $id, $isEdit);
   }
 }
 
 sub DoRc {
-  my ($fileData, $rcline, $i, $daysago, $lastTs, $ts, $idOnly);
-  my (@fullrc, $status, $oldFileData, $firstTs, $errorText);
-  my $starttime = 0;
-  my $showbar = 0;
+    my ($id, $pageName, $revision, $goodRevision, $lastEdited, $body) = @_;
+    my $starttime = 0;
+    my $daysago;
+    my @rcDays;
 
-  my $fs3exp = $config->FS3;
-
-  if (&GetParam("from", 0)) {
-    $starttime = &GetParam("from", 0);
-    print "<h2>" . "Updates since " . &TimeToText($starttime)
-          . "</h2>\n";
-  } else {
-    $daysago = &GetParam("days", 0);
-    $daysago = &GetParam("rcdays", 0)  if ($daysago == 0);
-    if ($daysago) {
-      $starttime = $Now - ((24*60*60)*$daysago);
-      print "<h2>" . sprintf("Updates in the last %s day" .
-                    (($daysago != 1)?"s":""), $daysago) . "</h2>\n";
+    foreach my $days (@{$config->RcDays}) {
+        push @rcDays, { num => $days,
+                        url => $config->ScriptName .
+                            "?action=rc&amp;days=$days" };
     }
-  }
-  if ($starttime == 0) {
-    $starttime = $Now - ((24*60*60) * $config->RcDefault);
-    print "<h2>" . sprintf("Updates in the last %s day"
-                      . (($config->RcDefault != 1)?"s":""), $config->RcDefault) .
-                    "</h2>\n";
-    # Translation of above line is identical to previous version
-  }
-
-  # Read rclog data (and oldrclog data if needed)
-  ($status, $fileData) = &PurpleWiki::Database::ReadFile($config->RcFile);
-  $errorText = "";
-  if (!$status) {
-    # Save error text if needed.
-    $errorText = '<p><strong>' . "Could not open " . $config->RCName . " log file"
-                 . ":</strong> " . $config->RcFile . "<p>"
-                 . 'Error was' . ":\n<pre>$!</pre>\n" . '<p>'
-    . 'Note: This error is normal if no changes have been made.' . "\n";
-  }
-  @fullrc = split(/\n/, $fileData);
-  $firstTs = 0;
-  if (@fullrc > 0) {  # Only false if no lines in file
-    ($firstTs) = split(/$fs3exp/, $fullrc[0]);
-  }
-  if (($firstTs == 0) || ($starttime <= $firstTs)) {
-    ($status, $oldFileData) = &PurpleWiki::Database::ReadFile($config->RcOldFile);
-    if ($status) {
-      @fullrc = split(/\n/, $oldFileData . $fileData);
-    } else {
-      if ($errorText ne "") {  # could not open either rclog file
-        print $errorText;
-        print "<p><strong>"
-              . "Could not open old " . $config->RCName . " log file"
-              . ":</strong> " . $config->RcOldFile . "<p>"
-              . 'Error was' . ":\n<pre>$!</pre>\n";
-        return;
-      }
+    if (GetParam("from", 0)) {
+        $starttime = GetParam("from", 0);
     }
-  }
-  $lastTs = 0;
-  if (@fullrc > 0) {  # Only false if no lines in file
-    ($lastTs) = split(/$fs3exp/, $fullrc[$#fullrc]);
-  }
-  $lastTs++  if (($Now - $lastTs) > 5);  # Skip last unless very recent
-
-  $idOnly = &GetParam("rcidonly", "");
-  if ($idOnly ne "") {
-    print '<b>(' . sprintf("for %s only", &ScriptLink($idOnly, $idOnly))
-          . ')</b><br>';
-  }
-  foreach $i (@{$config->RcDays}) {
-    print " | "  if $showbar;
-    $showbar = 1;
-    print &ScriptLink("action=rc&days=$i",
-                      sprintf("%s day" . (($i != 1)?'s':''), $i));
-      # Note: must have two translations (for "day" and "days")
-      # Following comment line is for translation helper script
-      # Ts('%s days', '');
-  }
-  print "<br>" . &ScriptLink("action=rc&from=$lastTs",
-                             'List new changes starting from');
-  print " " . &TimeToText($lastTs) . "<br>\n";
-
-  # Later consider a binary search?
-  $i = 0;
-  while ($i < @fullrc) {  # Optimization: skip old entries quickly
-    ($ts) = split(/$fs3exp/, $fullrc[$i]);
-    if ($ts >= $starttime) {
-      $i -= 1000  if ($i > 0);
-      last;
+    else {
+        $daysago = GetParam("days", 0);
+        $daysago = GetParam("rcdays", 0)  if ($daysago == 0);
+        if ($daysago) {
+            $starttime = $Now - ((24*60*60)*$daysago);
+        }
     }
-    $i += 1000;
-  }
-  $i -= 1000  if (($i > 0) && ($i >= @fullrc));
-  for (; $i < @fullrc ; $i++) {
-    ($ts) = split(/$fs3exp/, $fullrc[$i]);
-    last if ($ts >= $starttime);
-  }
-  if ($i == @fullrc) {
-    print '<br><strong>' . 'No updates since ' .
-                              &TimeToText($starttime) . "</strong><br>\n";
-  } else {
-    splice(@fullrc, 0, $i);  # Remove items before index $i
-    # Later consider an end-time limit (items older than X)
-    print &GetRcHtml(@fullrc);
-  }
-  print '<p>' . 'Page generated ' . &TimeToText($Now) . "<br>\n";
-}
-
-sub GetRcHtml {
-  my @outrc = @_;
-  my ($rcline, $html, $date, $sum, $edit, $count, $newtop, $author);
-  my ($showedit, $inlist, $link, $all, $idOnly);
-  my ($ts, $pagename, $summary, $isEdit, $host, $kind, $extraTemp);
-  my ($tEdit, $tChanges, $tDiff);
-  my %extra = ();
-  my %changetime = ();
-  my %pagecount = ();
-
-  my $fs3exp = $config->FS3;
-  my $fs2exp = $config->FS2;
-
-  $tEdit    = '(edit)';    # Optimize translations out of main loop
-  $tDiff    = '(diff)';
-  $tChanges = 'changes';
-  $showedit = &GetParam("rcshowedit", $config->ShowEdits);
-  $showedit = &GetParam("showedit", $showedit);
-  if ($showedit != 1) {
-    my @temprc = ();
-    foreach $rcline (@outrc) {
-      ($ts, $pagename, $summary, $isEdit, $host) = split(/$fs3exp/, $rcline);
-      if ($showedit == 0) {  # 0 = No edits
-        push(@temprc, $rcline)  if (!$isEdit);
-      } else {               # 2 = Only edits
-        push(@temprc, $rcline)  if ($isEdit);
-      }
+    if ($starttime == 0) {
+        $starttime = $Now - ((24*60*60) * $config->RcDefault);
+        $daysago = $config->RcDefault;
     }
-    @outrc = @temprc;
-  }
-
-  # Later consider folding into loop above?
-  # Later add lines to assoc. pagename array (for new RC display)
-  foreach $rcline (@outrc) {
-    ($ts, $pagename) = split(/$fs3exp/, $rcline);
-    $pagecount{$pagename}++;
-    $changetime{$pagename} = $ts;
-  }
-  $date = "";
-  $inlist = 0;
-  $html = "";
-  $all = &GetParam("rcall", 0);
-  $all = &GetParam("all", $all);
-  $newtop = &GetParam("rcnewtop", $config->RecentTop);
-  $newtop = &GetParam("newtop", $newtop);
-  $idOnly = &GetParam("rcidonly", "");
-
-  @outrc = reverse @outrc if ($newtop);
-  foreach $rcline (@outrc) {
-    ($ts, $pagename, $summary, $isEdit, $host, $kind, $extraTemp)
-      = split(/$fs3exp/, $rcline);
-    # Later: need to change $all for new-RC?
-    next  if ((!$all) && ($ts < $changetime{$pagename}));
-    next  if (($idOnly ne "") && ($idOnly ne $pagename));
-    %extra = split(/$fs2exp/, $extraTemp, -1);
-    if ($date ne &CalcDay($ts)) {
-      $date = &CalcDay($ts);
-      if ($inlist) {
-        $html .= "</UL>\n";
-        $inlist = 0;
-      }
-      $html .= "<p><strong>" . $date . "</strong><p>\n";
+    my $rcRef = PurpleWiki::Database::recentChanges($config, $starttime);
+    my @recentChanges;
+    my $prevDate;
+    foreach my $page (@{$rcRef}) {
+        my $date = CalcDay($page->{timeStamp});
+        if ($date ne $prevDate) {
+            push @recentChanges, { date => $date, pages => [] };
+            $prevDate = $date;
+        }
+        push @{$recentChanges[$#recentChanges]->{pages}},
+            { id => $page->{id},
+              pageName => $page->{pageName},
+              time => CalcTime($page->{timeStamp}),
+              numChanges => $page->{numChanges},
+              summary => QuoteHtml($page->{summary}),
+              userName => $page->{userName},
+              userId => $page->{userId},
+              host => $page->{host},
+              diffUrl => $config->ScriptName .
+                  '?action=browse&amp;diff=1&amp;id=' . $page->{id},
+              changeUrl => $config->ScriptName .
+                  '?action=history&amp;id=' . $page->{id} };
     }
-    if (!$inlist) {
-      $html .= "<UL>\n";
-      $inlist = 1;
-    }
-    $host = &QuoteHtml($host);
-    if (defined($extra{'name'}) && defined($extra{'id'})) {
-      $author = &GetAuthorLink($host, $extra{'name'}, $extra{'id'});
-    } else {
-      $author = &GetAuthorLink($host, "", 0);
-    }
-    $sum = "";
-    if (($summary ne "") && ($summary ne "*")) {
-      $summary = &QuoteHtml($summary);
-      $sum = "<strong>[$summary]</strong> ";
-    }
-    $edit = "";
-    $edit = "<em>$tEdit</em> "  if ($isEdit);
-    $count = "";
-    if ((!$all) && ($pagecount{$pagename} > 1)) {
-      $count = "($pagecount{$pagename} ";
-      if (&GetParam("rcchangehist", 1)) {
-        $count .= &GetHistoryLink($pagename, $tChanges);
-      } else {
-        $count .= $tChanges;
-      }
-      $count .= ") ";
-    }
-    $link = "";
-    if ($config->UseDiff && &GetParam("diffrclink", 1)) {
-      $link .= &ScriptLinkDiff(4, $pagename, $tDiff, "") . "  ";
-    }
-    $link .= &GetPageLink($pagename);
-    $html .= "<li>$link ";
-    # Later do new-RC looping here.
-    $html .=  &CalcTime($ts) . " $count$edit" . " $sum";
-    $html .= ". . . . . $author\n";  # Make dots optional?
-  }
-  $html .= "</UL>\n" if ($inlist);
-  return $html;
+    my @vPages = &visitedPages;
+    $wikiTemplate->vars(&globalTemplateVars,
+                        pageName => $pageName,
+                        expandedPageName => &expandPageName($pageName),
+                        visitedPages => \@vPages,
+                        showRevision => $revision,
+                        revision => $goodRevision,
+                        body => $body,
+                        daysAgo => $daysago,
+                        rcDays => \@rcDays,
+                        changesFrom => TimeToText($starttime),
+                        currentDate => TimeToText($Now),
+                        recentChanges => \@recentChanges,
+                        lastEdited => $lastEdited,
+                        pageUrl => $config->ScriptName . "?$id",
+                        backlinksUrl => $config->ScriptName . "?search=$id",
+                        editUrl => $config->ScriptName . "?action=edit&amp;id=$id",
+                        revisionsUrl => $config->ScriptName . "?action=history&amp;id=$id",
+                        diffUrl => $config->ScriptName . "?action=browse&amp;diff=1&amp;id=$id");
+    print GetHttpHeader() . $wikiTemplate->process('viewRecentChanges');
 }
 
 sub DoRandom {
   my ($id, @pageList);
 
-  @pageList = &PurpleWiki::Database::AllPagesList($config);  # Optimize?
+  @pageList = PurpleWiki::Database::AllPagesList($config);  # Optimize?
   $id = $pageList[int(rand($#pageList + 1))];
-  &ReBrowsePage($id, "", 0);
+  ReBrowsePage($id, "", 0);
 }
 
 sub DoHistory {
-  my ($id) = @_;
-  my ($html, $canEdit);
-  my $page;
-  my $text;
-  my $keptRevision;
+    my ($id) = @_;
+    my $page;
+    my $text;
+    my $keptRevision;
+    my @pageHistory;
 
-  print &GetHeader("",&QuoteHtml("History of $id"), "") . "<br>";
-  $page = new PurpleWiki::Database::Page('id' => $id, 'now' => $Now,
-    config => $config);
-  $page->openPage();
+    $page = new PurpleWiki::Database::Page('id' => $id, 'now' => $Now);
+    $page->openPage();
 
-  $canEdit = &UserCanEdit($id);
-  $canEdit = 0;  # Turn off direct "Edit" links
-  $html = &GetHistoryLine($id, $page->getSection(), $canEdit, 1);
-  $keptRevision = new PurpleWiki::Database::KeptRevision(id => $id,
-    config => $config);
-  foreach my $section (reverse sort {$a->getRevision() <=> $b->getRevision()}
-                    $keptRevision->getSections()) {
-    # If KeptRevision == Current Revision don't print it. - matthew
-    if ($section->getRevision() != $page->getSection()->getRevision()) {
-      $html .= &GetHistoryLine($id, $section, $canEdit, 0);
+    push @pageHistory, getRevisionHistory($id, $page->getSection, 1);
+    $keptRevision = new PurpleWiki::Database::KeptRevision(id => $id);
+    foreach my $section (reverse sort {$a->getRevision() <=> $b->getRevision()}
+                         $keptRevision->getSections()) {
+        # If KeptRevision == Current Revision don't print it. - matthew
+        if ($section->getRevision() != $page->getSection()->getRevision()) {
+            push @pageHistory, getRevisionHistory($id, $section, 0);
+        }
     }
-  }
-  print $html;
-  print &GetCommonFooter();
+
+    my @vPages = &visitedPages;
+    $wikiTemplate->vars(&globalTemplateVars,
+                        pageName => $id,
+                        visitedPages => \@vPages,
+                        pageHistory => \@pageHistory);
+    print GetHttpHeader() . $wikiTemplate->process('viewPageHistory');
 }
 
-sub GetHistoryLine {
-  my ($id, $section, $canEdit, $isCurrent) = @_;
-  my ($html, $expirets, $rev, $summary, $host, $user, $uid, $ts, $minor);
-  my (%sect, %revtext);
+sub getRevisionHistory {
+    my ($id, $section, $isCurrent) = @_;
+    my ($rev, $summary, $host, $user, $uid, $ts, $pageUrl, $diffUrl);
 
-  my $text = $section->getText();
-  $rev = $section->getRevision();
-  $summary = $text->getSummary();
-  if ((defined($section->getHost())) && ($section->getHost() ne '')) {
-    $host = $section->getHost();
-  } else {
-    $host = $section->getIP();
-    $host =~ s/\d+$/xxx/;      # Be somewhat anonymous (if no host)
-  }
-  $user = $section->getUsername();
-  $uid = $section->getID();
-  $ts = $section->getTS();
-  $minor = '';
-  $minor = '<i>' . '(edit)' . '</i> '  if ($text->isMinor());
-  $expirets = $Now - ($config->KeepDays * 24 * 60 * 60);
-
-  $html = "Revision $rev" . ": ";
-  if ($isCurrent) {
-    $html .= &GetPageLinkText($id, 'View') . ' ';
-    if ($canEdit) {
-      $html .= &GetEditLink($id, 'Edit') . ' ';
+    my $text = $section->getText();
+    $rev = $section->getRevision();
+    $summary = $text->getSummary();
+    if ((defined($section->getHost())) && ($section->getHost() ne '')) {
+        $host = $section->getHost();
+    } else {
+        $host = $section->getIP();
+        $host =~ s/\d+$/xxx/;      # Be somewhat anonymous (if no host)
     }
-    if ($config->UseDiff) {
-      $html .= 'Diff' . ' ';
+    $user = $section->getUsername();
+    $uid = $section->getID();
+    $ts = $section->getTS();
+
+    if ($isCurrent) {
+        $pageUrl = $config->ScriptName . "?$id";
     }
-  } else {
-    $html .= &GetOldPageLink('browse', $id, $rev, 'View') . ' ';
-    if ($canEdit) {
-      $html .= &GetOldPageLink('edit',   $id, $rev, 'Edit') . ' ';
+    else {
+        $pageUrl = $config->ScriptName .
+          "?action=browse&amp;id=$id&amp;revision=$rev";
+        $diffUrl = $config->ScriptName .
+            "?action=browse&amp;diff=1&amp;id=$id&amp;diffrevision=$rev";
     }
-    if ($config->UseDiff) {
-      $html .= &ScriptLinkDiffRevision(1, $id, $rev, 'Diff') . ' ';
+    if (defined($summary) && ($summary ne "") && ($summary ne "*")) {
+        $summary = QuoteHtml($summary);   # Thanks Sunir! :-)
     }
-  }
-  $html .= ". . " . $minor . &TimeToText($ts) . " ";
-  $html .= 'by' . ' ' . &GetAuthorLink($host, $user, $uid) . " ";
-  if (defined($summary) && ($summary ne "") && ($summary ne "*")) {
-    $summary = &QuoteHtml($summary);   # Thanks Sunir! :-)
-    $html .= "<b>[$summary]</b> ";
-  }
-  $html .= "<br>\n";
-  return $html;
-}
-
-# ==== HTML and page-oriented functions ====
-sub ScriptLink {
-  my ($action, $text) = @_;
-
-  return "<a href=\"$ScriptName?$action\">$text</a>";
-}
-
-sub GetPageLink {
-  my ($id) = @_;
-  my $name = $id;
-
-  my $MainPage = $PurpleWiki::Page::MainPage;
-  $id =~ s|^/|$MainPage/|;
-  if ($config->FreeLinks) {
-    $id = &FreeToNormal($id);
-    $name =~ s/_/ /g;
-  }
-  return &ScriptLink($id, $name);
-}
-
-sub GetPageLinkText {
-  my ($id, $name) = @_;
-
-  my $MainPage = $PurpleWiki::Page::MainPage;
-  $id =~ s|^/|$MainPage/|;
-  if ($config->FreeLinks) {
-    $id = &FreeToNormal($id);
-    $name =~ s/_/ /g;
-  }
-  return &ScriptLink($id, $name);
-}
-
-sub GetEditLink {
-  my ($id, $name) = @_;
-
-  if ($config->FreeLinks) {
-    $id = &FreeToNormal($id);
-    $name =~ s/_/ /g;
-  }
-  return &ScriptLink("action=edit&id=$id", $name);
-}
-
-sub GetOldPageLink {
-  my ($kind, $id, $revision, $name) = @_;
-
-  if ($config->FreeLinks) {
-    $id = &FreeToNormal($id);
-    $name =~ s/_/ /g;
-  }
-  return &ScriptLink("action=$kind&id=$id&revision=$revision", $name);
-}
-
-sub GetSiteUrl {
-    my ($site) = @_;
-    my ($data, $url, $status);
-
-    if (!$InterSiteInit) {
-      $InterSiteInit = 1;
-      ($status, $data) = &PurpleWiki::Database::ReadFile($config->InterFile);
-      return ""  if (!$status);
-      %InterSite = split(/\s+/, $data);  # Later consider defensive code
+    else {
+        $summary = '';
     }
-    $url = $InterSite{$site}  if (defined($InterSite{$site}));
-    return $url;
+    return { revision => $rev,
+             dateTime => TimeToText($ts),
+             host => $host,
+             user => $user,
+             summary => $summary,
+             pageUrl => $pageUrl,
+             diffUrl => $diffUrl };
 }
 
-
-
-sub GetSearchLink {
-  my ($id) = @_;
-  my $name = $id;
-
-  $id =~ s|.+/|/|;   # Subpage match: search for just /SubName
-  if ($config->FreeLinks) {
-    $name =~ s/_/ /g;  # Display with spaces
-    $id =~ s/_/+/g;    # Search for url-escaped spaces
-  }
-  return &ScriptLink("search=$id", $name);
-}
-
-sub GetPrefsLink {
-  return &ScriptLink("action=editprefs", 'Preferences');
-}
-
-sub GetRandomLink {
-  return &ScriptLink("action=random", 'Random Page');
-}
-
-sub ScriptLinkDiff {
-  my ($diff, $id, $text, $rev) = @_;
-
-  $rev = "&revision=$rev"  if ($rev ne "");
-  $diff = &GetParam("defaultdiff", 1)  if ($diff == 4);
-  return &ScriptLink("action=browse&diff=$diff&id=$id$rev", $text);
-}
-
-sub ScriptLinkDiffRevision {
-  my ($diff, $id, $rev, $text) = @_;
-
-  $rev = "&diffrevision=$rev"  if ($rev ne "");
-  $diff = &GetParam("defaultdiff", 1)  if ($diff == 4);
-  return &ScriptLink("action=browse&diff=$diff&id=$id$rev", $text);
-}
-
-sub ScriptLinkTitle {
-  my ($action, $text, $title) = @_;
-
-  if ($config->FreeLinks) {
-    $action =~ s/ /_/g;
-  }
-  return "<a href=\"$ScriptName?$action\" title=\"$title\">$text</a>";
-}
-
-sub GetAuthorLink {
-  my ($host, $userName, $uid) = @_;
-  my ($html, $title, $userNameShow);
-
-  $userNameShow = $userName;
-  if ($config->FreeLinks) {
-    $userName     =~ s/ /_/g;
-    $userNameShow =~ s/_/ /g;
-  }
-  if (&ValidId($userName) ne "") {  # Invalid under current rules
-    $userName = "";  # Just pretend it isn't there.
-  }
-  # Later have user preference for link titles and/or host text?
-  if (($uid > 0) && ($userName ne "")) {
-    $html = &ScriptLinkTitle($userName, $userNameShow,
-            "ID $uid" . ' ' . "from $host");
-  } else {
-    $html = $host;
-  }
-  return $html;
-}
-
-sub GetHistoryLink {
-  my ($id, $text) = @_;
-
-  if ($config->FreeLinks) {
-    $id =~ s/ /_/g;
-  }
-  return &ScriptLink("action=history&id=$id", $text);
-}
-
-sub GetHeader {
-  my ($id, $title, $oldId) = @_;
-  my $header = "";
-  my $logoImage = "";
-  my $result = "";
-  my $embed = &GetParam('embed', $config->EmbedWiki);
-  my $altText = '[Home]';
-
-  $result = &GetHttpHeader();
-  if ($config->FreeLinks) {
-    $title =~ s/_/ /g;   # Display as spaces
-  }
-  $result .= &GetHtmlHeader($config->SiteName. ": $title");
-  return $result  if ($embed);
-
-  if ($oldId ne '') {
-    $result .= $q->h3('(' . "redirected from " . 
-                               &GetEditLink($oldId, $oldId) . ')');
-  }
-  if ((!$embed) && ($config->LogoUrl ne "")) {
-    $logoImage = "img src=\"" . $config->LogoUrl . "\" alt=\"$altText\" border=0";
-    if (!$config->LogoLeft) {
-      $logoImage .= " align=\"right\"";
-    }
-    $header = &ScriptLink($config->HomePage, "<$logoImage>");
-  }
-  if ($id ne '') {
-    $result .= $q->h1($header . &GetSearchLink($id));
-  } else {
-    $result .= $q->h1($header . $title);
-  }
-  if (&GetParam("toplinkbar", 1)) {
-    # Later consider smaller size?
-    $result .= &GetGotoBar($id) . "<hr>";
-  }
-  return $result;
-}
-
+# ==== page-oriented functions ====
 sub GetHttpHeader {
-  my $cookie;
-  if (defined($SetCookie{'id'})) {
-    $cookie = $config->CookieName. "="
-            . "rev&" . $SetCookie{'rev'}
-            . "&id&" . $SetCookie{'id'}
-            . "&randkey&" . $SetCookie{'randkey'};
-    $cookie .= ";expires=Fri, 08-Sep-2010 19:48:23 GMT";
+    my $cookie = $q->cookie(-name => $config->SiteName,
+                            -value => $session->id,
+                            -path => $config->ScriptDir,
+                            -expires => '+7d');
     if ($config->HttpCharset ne '') {
-      return $q->header(-cookie=>$cookie,
-                        -type=>"text/html; charset=" . $config->HttpCharset);
+        return $q->header(-cookie=>$cookie,
+                          -type=>"text/html; charset=" . $config->HttpCharset);
     }
     return $q->header(-cookie=>$cookie);
-  }
-  if ($config->HttpCharset ne '') {
-    return $q->header(-type=>"text/html; charset=" . $config->HttpCharset);
-  }
-  return $q->header();
-}
-
-sub GetHtmlHeader {
-  my ($title) = @_;
-  my ($dtd, $html);
-
-  $html = '';
-  $dtd = '-//IETF//DTD HTML//EN';
-  $html = qq(<!DOCTYPE HTML PUBLIC "$dtd">\n);
-  $title = $q->escapeHTML($title);
-  $html .= "<html><head><title>$title</title>\n";
-  if ($config->SiteBase ne "") {
-    $html .= qq(<base href=") . $config->SiteBase . qq(">\n);
-  }
-  if ($config->StyleSheet ne '') {
-    $html .= qq(<link rel="stylesheet" href=") . $config->StyleSheet .
-    qq(" />\n);
-  }
-  # Insert any other body stuff (like scripts) into $bodyExtra here
-  # (remember to add a space at the beginning to separate from prior text)
-  $html .= "</head><body>\n";
-  return $html;
-}
-
-sub GetFooterText {
-  my $section = shift;
-  my ($id, $rev) = @_;
-  my $result = '';
-
-  if (&GetParam('embed', $config->EmbedWiki)) {
-    return $q->end_html;
-  }
-  $result = &GetFormStart();
-  $result .= &GetGotoBar($id);
-  if (&UserCanEdit($id, 0)) {
-    if ($rev ne '') {
-      $result .= &GetOldPageLink('edit',   $id, $rev,
-                                 "Edit revision $rev of this page");
-    } else {
-      $result .= &GetEditLink($id, 'Edit text of this page');
-    }
-  } else {
-    $result .= 'This page is read-only';
-  }
-  $result .= ' | ';
-  $result .= &GetHistoryLink($id, 'View other revisions');
-  if ($rev ne '') {
-    $result .= ' | ';
-    $result .= &GetPageLinkText($id, 'View current revision');
-  }
-  if ($section->getRevision() > 0) {
-    $result .= '<br>';
-    if ($rev eq '') {  # Only for most current rev
-      $result .= 'Last edited';
-    } else {
-      $result .= 'Edited';
-    }
-    $result .= ' ' . &TimeToText($section->getTS());
-  }
-  if ($config->UseDiff) {
-    $result .= ' ' . &ScriptLinkDiff(4, $id, '(diff)', $rev);
-  }
-  $result .= '<br>' . &GetSearchForm();
-  if ($config->DataDir =~ m|/tmp/|) {
-    $result .= '<br><b>' . 'Warning' . ':</b> '
-               . 'Database is stored in temporary directory '
-               . $config->DataDir . '<br>';
-  }
-  $result .= $q->endform;
-  $result .= &GetMinimumFooter();
-  return $result;
-}
-
-sub GetCommonFooter {
-  return "<hr>" . &GetFormStart() . &GetGotoBar("") .
-         &GetSearchForm() . $q->endform . &GetMinimumFooter();
-}
-
-sub GetMinimumFooter {
-  if ($config->FooterNote ne '') {
-    return $config->FooterNote . $q->end_html;  # Allow local translations
-  }
-  return $q->end_html;
-}
-
-sub GetFormStart {
-  return $q->startform("POST", "$ScriptName",
-                       "application/x-www-form-urlencoded");
-}
-
-sub GetGotoBar {
-  my ($id) = @_;
-  my ($main, $bartext);
-
-  $bartext  = &GetPageLink($config->HomePage);
-  if ($id =~ m|/|) {
-    $main = $id;
-    $main =~ s|/.*||;  # Only the main page name (remove subpage)
-    $bartext .= " | " . &GetPageLink($main);
-  }
-  $bartext .= " | " . &GetPageLink($config->RCName);
-  $bartext .= " | " . &GetPrefsLink();
-  if (&GetParam("linkrandom", 0)) {
-    $bartext .= " | " . &GetRandomLink();
-  }
-  if ($config->UserGotoBar ne '') {
-    $bartext .= " | " . $config->UserGotoBar;
-  }
-  $bartext .= "<br>\n";
-  return $bartext;
-}
-
-sub GetSearchForm {
-  my ($result);
-
-  $result = 'Search:' . ' ' . $q->textfield(-name=>'search', -size=>20)
-            . &GetHiddenValue("dosearch", 1);
-  return $result;
 }
 
 # Returns the URL of a page after it has 
@@ -916,10 +491,9 @@ sub WikiToHTML {
   my $id = shift;
   my $pageText = shift;
 
-  my $wiki = $wikiParser->parse($pageText, config => $config, 'freelink' => $config->FreeLinks);
+  my $wiki = $wikiParser->parse($pageText, 'freelink' => $config->FreeLinks);
   my $url = $q->url(-full => 1) . '?' . $id;
-  return $wiki->view('wikihtml', config => $config, url => $url,
-                     pageName => $id);
+  return $wiki->view('wikihtml', url => $url, pageName => $id);
 }
 
 sub QuoteHtml {
@@ -935,30 +509,24 @@ sub QuoteHtml {
 }
 
 # ==== Misc. functions ====
-sub ReportError {
-  my ($errmsg) = @_;
-
-  print $q->header, "<H2>", $errmsg, "</H2>", $q->end_html;
-}
-
 sub ValidId {
   my ($id) = @_;
 
   if (length($id) > 120) {
-    return "Page name is too long: $id";
+    return "pageNameTooLong";
   }
   if ($id =~ m| |) {
-    return "Page name may not contain space characters: $id";
+    return "pageNameTooManyChars";
   }
   if ($config->UseSubpage()) {
     if ($id =~ m|.*/.*/|) {
-      return "Too many / characters in page $id";
+      return "pageNameTooManySlashes";
     }
     if ($id =~ /^\//) {
-      return "Invalid Page $id (subpage without main page)";
+      return "pageNameNoMainPage";
     }
     if ($id =~ /\/$/) {
-      return "Invalid Page $id (missing subpage name)";
+      return "pageNameMissingSubpage";
     }
   }
 
@@ -969,108 +537,40 @@ sub ValidId {
     $id =~ s/ /_/g;
     if (!$config->UseSubpage()) {
       if ($id =~ /\//) {
-        return "Invalid Page $id (/ not allowed)";
+        return "pageNameSlashNotAllowed";
       }
     }
     if (!($id =~ m|^$freelinkpattern$|)) {
-      return "Invalid Page $id";
+      return "pageNameInvalid";
     }
     if ($id =~ m|\.db$|) {
-      return "Invalid Page $id (must not end with .db)";
+      return "pageNameInvalid";
     }
     if ($id =~ m|\.lck$|) {
-      return "Invalid Page $id (must not end with .lck)";
+      return "pageNameInvalid";
     }
     return "";
   } else {
     if (!($id =~ /^$linkpattern$/)) {
-      return "Invalid Page $id";
+      return "pageNameInvalid";
     }
   }
   return "";
 }
 
 sub ValidIdOrDie {
-  my ($id) = @_;
-  my $error;
+    my $id = shift;
+    my $error;
 
-  $error = &ValidId($id);
-  if ($error ne "") {
-    &ReportError($error);
-    return 0;
-  }
-  return 1;
-}
-
-sub UserCanEdit {
-  my ($id, $deepCheck) = @_;
-
-  # Optimized for the "everyone can edit" case (don't check passwords)
-  if ($id ne "") {
-    my $page = new PurpleWiki::Database::Page('id' => $id, config => $config);
-    if (-f $page->getLockedPageFile()) {
-      return 1  if (&UserIsAdmin());  # Requires more privledges
-      # Later option for editor-level to edit these pages?
-      return 0;
+    $wikiTemplate->vars(&globalTemplateVars,
+                        pageName => $id);
+    $error = ValidId($id);
+    if ($error ne "") {
+        print GetHttpHeader() . $wikiTemplate->process('errors/$error');
+        return 0;
     }
-  }
-  if (!$config->EditAllowed) {
-    return 1  if (&UserIsEditor());
-    return 0;
-  }
-  if (-f $config->DataDir . "/noedit") {
-    return 1  if (&UserIsEditor());
-    return 0;
-  }
-  if ($deepCheck) {   # Deeper but slower checks (not every page)
-    return 1  if (&UserIsEditor());
-    return 0  if (&UserIsBanned());
-  }
-  return 1;
+    return 1;
 }
-
-sub UserIsBanned {
-  my ($host, $ip, $data, $status);
-
-  ($status, $data) = &PurpleWiki::Database::ReadFile($config->DataDir . "/banlist");
-  return 0  if (!$status);  # No file exists, so no ban
-  $ip = $ENV{'REMOTE_ADDR'};
-  $host = &GetRemoteHost(0);
-  foreach (split(/\n/, $data)) {
-    next  if ((/^\s*$/) || (/^#/));  # Skip empty, spaces, or comments
-    return 1  if ($ip   =~ /$_/i);
-    return 1  if ($host =~ /$_/i);
-  }
-  return 0;
-}
-
-sub UserIsAdmin {
-  my (@pwlist, $userPassword);
-
-  return 0  if ($config->AdminPass eq "");
-  $userPassword = &GetParam("adminpw", "");
-  return 0  if ($userPassword eq "");
-  foreach (split(/\s+/, $config->AdminPass)) {
-    next  if ($_ eq "");
-    return 1  if ($userPassword eq $_);
-  }
-  return 0;
-}
-
-sub UserIsEditor {
-  my (@pwlist, $userPassword);
-
-  return 1  if (&UserIsAdmin());             # Admin includes editor
-  return 0  if ($config->EditPass eq "");
-  $userPassword = &GetParam("adminpw", "");  # Used for both
-  return 0  if ($userPassword eq "");
-  foreach (split(/\s+/, $config->EditPass)) {
-    next  if ($_ eq "");
-    return 1  if ($userPassword eq $_);
-  }
-  return 0;
-}
-
 
 sub CalcDay {
   my ($ts) = @_;
@@ -1110,7 +610,7 @@ sub CalcTime {
 sub TimeToText {
   my ($t) = @_;
 
-  return &CalcDay($t) . " " . &CalcTime($t);
+  return CalcDay($t) . " " . CalcTime($t);
 }
 
 sub GetParam {
@@ -1119,7 +619,7 @@ sub GetParam {
 
   $result = $q->param($name);
   if (!defined($result)) {
-    if (length($user->getField($name))) {
+    if ($user && length($user->getField($name))) {
       $result = $user->getField($name);
     } else {
       $result = $default;
@@ -1128,19 +628,12 @@ sub GetParam {
   return $result;
 }
 
-sub GetHiddenValue {
-  my ($name, $value) = @_;
-
-  $q->param($name, $value);
-  return $q->hidden($name);
-}
-
 sub GetRemoteHost {
   my ($doMask) = @_;
   my ($rhost, $iaddr);
 
   $rhost = $ENV{REMOTE_HOST};
-  if ($config->UseLookup && ($rhost eq "")) {
+  if ($rhost eq "") {
     # Catch errors (including bad input) without aborting the script
     eval 'use Socket; $iaddr = inet_aton($ENV{REMOTE_ADDR});'
          . '$rhost = gethostbyaddr($iaddr, AF_INET)';
@@ -1181,67 +674,86 @@ sub FreeToNormal {
 sub DoOtherRequest {
   my ($id, $action, $text, $search);
 
-  $action = &GetParam("action", "");
-  $id = &GetParam("id", "");
+  $action = GetParam("action", "");
+  $id = GetParam("id", "");
+  my $iname = &GetParam("xri_iname", "");
   if ($action ne "") {
     $action = lc($action);
-    if      ($action eq "edit") {
-      &DoEdit($id, 0, 0, "", 0)  if &ValidIdOrDie($id);
+    if ($action eq "edit") {
+      DoEdit($id, 0, 0, "", 0)  if ValidIdOrDie($id);
     } elsif ($action eq "unlock") {
-      &DoUnlock();
+      DoUnlock();
     } elsif ($action eq "index") {
-      &DoIndex();
-    } elsif ($action eq "pagelock") {
-      &DoPageLock();
-    } elsif ($action eq "editlock") {
-      &DoEditLock();
+      DoIndex();
     } elsif ($action eq "editprefs") {
-      &DoEditPrefs();
-    } elsif ($action eq "editbanned") {
-      &DoEditBanned();
+      DoEditPrefs();
+    } elsif ($config->UseINames && $action eq "getiname") {
+      if (!$user) {
+          &DoGetIname();
+      }
+      else { # return an error
+      }
     } elsif ($action eq "login") {
-      &DoEnterLogin();
+      DoEnterLogin();
     } elsif ($action eq "newlogin") {
-      $UserID = 0;
-      &DoEditPrefs();  # Also creates new ID
-    } elsif ($action eq "version") {
-      &DoShowVersion();
+      $user = undef;
+      DoEditPrefs();  # Also creates new ID
+    } elsif ($action eq "logout") {
+      &DoLogout;
+    } elsif ($action eq 'rss') {
+      require PurpleWiki::Syndication::Rss;
+      my $rss = new PurpleWiki::Syndication::Rss;
+      print $q->header(-type => 'text/xml') .
+          $rss->getRSS;
     } else {
       # Later improve error reporting
-      &ReportError("Invalid action parameter $action");
+      $wikiTemplate->vars(&globalTemplateVars,
+                          action => $action);
+      print GetHttpHeader() . $wikiTemplate->process('errors/actionInvalid');
     }
     return;
   }
+  elsif ($config->UseINames && $iname) {
+    my $xsid = &GetParam('xri_xsid', '');
+    &DoIname($iname, $xsid);
+    return;
+  }
+
+  $iname = &GetParam("iname", "");
+  if ($config->UseINames && $iname) {
+      my $localId = &GetParam("local_id", "");
+      my $rrsid = &GetParam("rrsid", "");
+      &DoAssociateIname($iname, $localId, $rrsid);
+      return;
+  }
+  
   if (&GetParam("edit_prefs", 0)) {
     &DoUpdatePrefs();
     return;
   }
-  if (&GetParam("edit_ban", 0)) {
-    &DoUpdateBanned();
+  if (GetParam("enter_login", 0)) {
+    DoLogin();
     return;
   }
-  if (&GetParam("enter_login", 0)) {
-    &DoLogin();
-    return;
-  }
-  $search = &GetParam("search", "");
-  if (($search ne "") || (&GetParam("dosearch", "") ne "")) {
-    &DoSearch($search);
+  $search = GetParam("search", "");
+  if (($search ne "") || (GetParam("dosearch", "") ne "")) {
+    DoSearch($search);
     return;
   }
   # Handle posted pages
-  if (&GetParam("oldtime", "") ne "") {
-    $id = &GetParam("title", "");
-    &DoPost()  if &ValidIdOrDie($id);
+  if (GetParam("oldtime", "") ne "") {
+    $id = GetParam("title", "");
+    DoPost()  if ValidIdOrDie($id);
     return;
   }
   # Later improve error message
-  &ReportError('Invalid URL.');
+  $wikiTemplate->vars(&globalTemplateVars);
+  print GetHttpHeader() . $wikiTemplate->process('errors/urlInvalid');
 }
 
 sub DoEdit {
   my ($id, $isConflict, $oldTime, $newText, $preview) = @_;
-  my ($header, $editRows, $editCols, $userName, $revision, $oldText);
+  my ($header, $editRows, $editCols, $revision, $oldText);
   my ($summary, $isEdit, $pageTime);
 
   my $page;
@@ -1249,33 +761,47 @@ sub DoEdit {
   my $text;
   my $keptRevision;
 
-  if (!&UserCanEdit($id, 1)) {
-    print &GetHeader("", 'Editing Denied', "");
-    if (&UserIsBanned()) {
-      print 'Editing not allowed: user, ip, or network is blocked.';
-      print "<p>";
-      print 'Contact the wiki administrator for more information.';
-    } else {
-      print "Editing not allowed: " . $config->SiteName . " is read-only.";
-    }
-    print &GetCommonFooter();
-    return;
+  my $pageName = $id;
+  if ($config->FreeLinks) {
+      $pageName =~ s/_/ /g;
   }
-  # Consider sending a new user-ID cookie if user does not have one
-  $keptRevision = new PurpleWiki::Database::KeptRevision(id => $id,
-    config => $config);
+
+  if (!$acl->canEdit($user, $id)) {
+      $wikiTemplate->vars(&globalTemplateVars);
+      print GetHttpHeader() . $wikiTemplate->process('errors/editBlocked');
+      return;
+  }
+  elsif (!$config->EditAllowed || -f $config->DataDir . "/noedit") {
+      $wikiTemplate->vars(&globalTemplateVars);
+      print GetHttpHeader() . $wikiTemplate->process('errors/editSiteReadOnly');
+      return;
+  }
+
+  $page = new PurpleWiki::Database::Page('id' => $id);
+
+  if (-f $page->getLockedPageFile()) {
+      $wikiTemplate->vars(&globalTemplateVars);
+      print GetHttpHeader() . $wikiTemplate->process('errors/editNotAllowed');
+      return;
+  }
+
+  $keptRevision = new PurpleWiki::Database::KeptRevision(id => $id);
+  my ($username, $userId);
+  if ($user) {
+      $userId = $user->id;
+      $username = $user->username;
+  }
   $page = new PurpleWiki::Database::Page('id' => $id, 'now' => $Now,
-                                 'username' => &GetParam("username", ""),
-                                 'userID' => $UserID, config => $config);
+                                 'username' => $username,
+                                 'userID' => $userId);
   $page->openPage();
   # FIXME: ordering is import in these next two, it shouldn't be
   $text = $page->getText();
   $section = $page->getSection();
   $pageTime = $section->getTS();
-  $header = "Editing $id";
   
   # Old revision handling
-  $revision = &GetParam('revision', '');
+  $revision = GetParam('revision', '');
   $revision =~ s/\D//g;  # Remove non-numeric chars
   if ($revision ne '') {
     if (!$keptRevision->hasRevision($revision)) {
@@ -1284,121 +810,58 @@ sub DoEdit {
     } else {
       # replace text with the revision we care about
       $text = $keptRevision->getRevision($revision)->getText();
-      $header = "Editing revision $revision of $id";
     }
   }
 
   $oldText = $text->getText();
 
+  my @vPages = &visitedPages;
+
   if ($preview && !$isConflict) {
     $oldText = $newText;
   }
 
-  $editRows = &GetParam("editrows", 20);
-  $editCols = &GetParam("editcols", 65);
-  print &GetHeader('', &QuoteHtml($header), '');
-
-  if ($revision ne '') {
-    print "\n<b>"
-          . "Editing old revision $revision "
-    . 'Saving this page will replace the latest revision with this text.'
-          . '</b><br>'
-  }
-
   if ($isConflict) {
-    $editRows -= 10  if ($editRows > 19);
-    print "\n<H1>" . 'Edit Conflict!' . "</H1>\n";
+      $wikiTemplate->vars(&globalTemplateVars,
+                          visitedPages => \@vPages,
+                          id => $id,
+                          pageName => $pageName,
+                          revision => $revision,
+                          isConflict => $isConflict,
+                          lastSavedTime => TimeToText($oldTime),
+                          currentTime => TimeToText($Now),
+                          pageTime => $pageTime,
+                          oldText => &QuoteHtml($oldText),
+                          newText => &QuoteHtml($newText),
+                          revisionsUrl => $config->ScriptName . "?action=history&amp;id=$id");
+      print GetHttpHeader() . $wikiTemplate->process('editConflict');
+  }
+  elsif ($preview) {
+      $wikiTemplate->vars(&globalTemplateVars,
+                          visitedPages => \@vPages,
+                          id => $id,
+                          pageName => $pageName,
+                          revision => $revision,
+                          isConflict => $isConflict,
+                          pageTime => $pageTime,
+                          oldText => &QuoteHtml($oldText),
+                          body => WikiToHTML($id, $oldText),
+                          revisionsUrl => $config->ScriptName . "?action=history&amp;id=$id");
+      print GetHttpHeader() . $wikiTemplate->process('previewPage');
+  }
+  else {
+      $wikiTemplate->vars(&globalTemplateVars,
+                          visitedPages => \@vPages,
+                          id => $id,
+                          pageName => $pageName,
+                          revision => $revision,
+                          pageTime => $pageTime,
+                          oldText => &QuoteHtml($oldText),
+                          revisionsUrl => $config->ScriptName . "?action=history&amp;id=$id");
+      print GetHttpHeader() . $wikiTemplate->process('editPage');
+  }
 
-    if ($isConflict>1) {
-      # The main purpose of a new warning is to display more text
-      # and move the save button down from its old location.
-      print "\n<H2>" . '(This is a new conflict)' . "</H2>\n";
-    }
-
-    print "<p><strong>",
-          'Someone saved this page after you started editing.', " ",
-          'The top textbox contains the saved text.', " ",
-          'Only the text in the top textbox will be saved.',
-          "</strong><br>\n",
-          'Scroll down to see your edited text.', "<br>\n";
-    print 'Last save time:', ' ', &TimeToText($oldTime),
-          " (", 'Current time is:', ' ', &TimeToText($Now), ")<br>\n";
-  }
-  print &GetFormStart();
-  print &GetHiddenValue("title", $id), "\n",
-        &GetHiddenValue("oldtime", $pageTime), "\n",
-        &GetHiddenValue("oldconflict", $isConflict), "\n";
-  if ($revision ne "") {
-    print &GetHiddenValue("revision", $revision), "\n";
-  }
-  print &GetTextArea('text', $oldText, $editRows, $editCols);
-  $summary = &GetParam("summary", "*");
-  print "<p>", 'Summary:',
-        $q->textfield(-name=>'summary',
-                      -default=>$summary, -override=>1,
-                      -size=>60, -maxlength=>200);
-  if (&GetParam("recent_edit") eq "on") {
-    print "<br>", $q->checkbox(-name=>'recent_edit', -checked=>1,
-                               -label=>'This change is a minor edit.');
-  } else {
-    print "<br>", $q->checkbox(-name=>'recent_edit',
-                               -label=>'This change is a minor edit.');
-  }
-  if ($config->EmailNotify) {
-    print "&nbsp;&nbsp;&nbsp;" .
-           $q->checkbox(-name=> 'do_email_notify',
-      -label=> "Send email notification that $id has been changed.");
-  }
-  print "<br>";
-  if ($config->EditNote ne '') {
-    print $config->EditNote . '<br>';  # Allow translation
-  }
-  print $q->submit(-name=>'Save', -value=>'Save'), "\n";
-  $userName = &GetParam("username", "");
-  if ($userName ne "") {
-    print ' (', 'Your user name is', ' ',
-          &GetPageLink($userName) . ') ';
-  } else {
-    print ' (', sprintf("Visit %s to set your user name.", &GetPrefsLink()), ') ';
-  }
-  print $q->submit(-name=>'Preview', -value=>'Preview'), "\n";
-
-  if ($isConflict) {
-    print "\n<br><hr><p><strong>", 'This is the text you submitted:',
-          "</strong><p>",
-          &GetTextArea('newtext', $newText, $editRows, $editCols),
-          "<p>\n";
-  }
-  print "<hr>\n";
-  if ($preview) {
-    print "<h2>", 'Preview:', "</h2>\n";
-    if ($isConflict) {
-      print "<b>",
-            'NOTE: This preview shows the revision of the other author.',
-            "</b><hr>\n";
-    }
-    $PurpleWiki::Page::MainPage = $id;
-    $PurpleWiki::Page::MainPage =~ s|/.*||;  # Only the main page name (remove subpage)
-    print &WikiToHTML($id,$oldText) . "<hr>\n";
-    print "<h2>", 'Preview only, not yet saved', "</h2>\n";
-  }
-  print &GetHistoryLink($id, 'View other revisions') . "<br>\n";
-  print &GetGotoBar($id);
-  print $q->endform;
-  print &GetMinimumFooter();
-}
-
-sub GetTextArea {
-  my ($name, $text, $rows, $cols) = @_;
-
-  if (&GetParam("editwide", 1)) {
-    return $q->textarea(-name=>$name, -default=>$text,
-                        -rows=>$rows, -columns=>$cols, -override=>1,
-                        -style=>'width:100%', -wrap=>'virtual');
-  }
-  return $q->textarea(-name=>$name, -default=>$text,
-                      -rows=>$rows, -columns=>$cols, -override=>1,
-                      -wrap=>'virtual');
+  $summary = GetParam("summary", "*");
 }
 
 sub DoEditPrefs {
@@ -1406,89 +869,17 @@ sub DoEditPrefs {
 
   $recentName = $config->RCName;
   $recentName =~ s/_/ /g;
-  &DoNewLogin()  if ($UserID < 400);
-  print &GetHeader('', 'Editing Preferences', "");
-  print &GetFormStart();
-  print GetHiddenValue("edit_prefs", 1), "\n";
-  print '<b>' . 'User Information:' . "</b>\n";
-  print '<br>' . "Your User ID number: $UserID" . "\n";
-  print '<br>' . 'UserName:' . ' ', &GetFormText('username', "", 20, 50);
-  print ' ' . '(blank to remove, or valid page name)';
-  print '<br>' . 'Set Password:' . ' ',
-        $q->password_field(-name=>'p_password', -value=>'*', 
-                           -size=>15, -maxlength=>50),
-        ' ', '(blank to remove password)', '<br>(',
-        'Passwords allow sharing preferences between multiple systems.',
-        ' ', 'Passwords are completely optional.', ')';
-  if ($config->AdminPass ne '') {
-    print '<br>', 'Administrator Password:', ' ',
-          $q->password_field(-name=>'p_adminpw', -value=>'*', 
-                             -size=>15, -maxlength=>50),
-          ' ', '(blank to remove password)', '<br>',
-          '(Administrator passwords are used for special maintenance.)';
-  }
-  if ($config->EmailNotify) {
-    print "<br>";
-    print &GetFormCheck('notify', 1,
-          'Include this address in the site email list.'), ' ',
-          '(Uncheck the box to remove the address.)';
-    print '<br>', 'Email Address:', ' ',
-          &GetFormText('email', "", 30, 60);
-  }
-  print "<hr><b>$recentName:</b>\n";
-  print '<br>', 'Default days to display:', ' ',
-        &GetFormText('rcdays', $config->RcDefault, 4, 9);
-  print "<br>", &GetFormCheck('rcnewtop', $config->RecentTop,
-                              'Most recent changes on top');
-  print "<br>", &GetFormCheck('rcall', 0,
-                              'Show all changes (not just most recent)');
-  %labels = (0=>'Hide minor edits', 1=>'Show minor edits',
-             2=>'Show only minor edits');
-  print '<br>', 'Minor edit display:', ' ';
-  print $q->popup_menu(-name=>'p_rcshowedit',
-                       -values=>[0,1,2], -labels=>\%labels,
-                       -default=>&GetParam("rcshowedit", $config->ShowEdits));
-  print "<br>", &GetFormCheck('rcchangehist', 1,
-                              'Use "changes" as link to history');
-  if ($config->UseDiff) {
-    print '<hr><b>', 'Differences:', "</b>\n";
-    print "<br>", &GetFormCheck('diffrclink', 1,
-                                "Show (diff) links on $recentName");
-    print "<br>", &GetFormCheck('alldiff', 0,
-                                'Show differences on all pages');
-    print "  (",  &GetFormCheck('norcdiff', 1,
-                                "No differences on $recentName"), ")";
-    %labels = (1=>'Major', 2=>'Minor', 3=>'Author');
-    print '<br>', 'Default difference type:', ' ';
-    print $q->popup_menu(-name=>'p_defaultdiff',
-                         -values=>[1,2,3], -labels=>\%labels,
-                         -default=>&GetParam("defaultdiff", 1));
-  }
-  print '<hr><b>', 'Misc:', "</b>\n";
-  # Note: TZ offset is added by TimeToText, so pre-subtract to cancel.
-  print '<br>', 'Server time:', ' ', &TimeToText($Now-$TimeZoneOffset);
-  print '<br>', 'Time Zone offset (hours):', ' ',
-        &GetFormText('tzoffset', 0, 4, 9);
-  print '<br>', &GetFormCheck('editwide', 1,
-                              'Use 100% wide edit area (if supported)');
-  print '<br>',
-        'Edit area rows:', ' ', &GetFormText('editrows', 20, 4, 4),
-        ' ', 'columns:',   ' ', &GetFormText('editcols', 65, 4, 4);
-
-  print '<br>', &GetFormCheck('toplinkbar', 1,
-                              'Show link bar on top');
-  print '<br>', &GetFormCheck('linkrandom', 0,
-                              'Add "Random Page" link to link bar');
-  print '<br>', $q->submit(-name=>'Save', -value=>'Save'), "\n";
-  print "<hr>\n";
-  print &GetGotoBar('');
-  print $q->endform;
-  print &GetMinimumFooter();
+  &DoNewLogin() if (!$user);
+  $wikiTemplate->vars(&globalTemplateVars,
+                      rcDefault => $config->RcDefault,
+                      serverTime => &TimeToText($Now - $TimeZoneOffset),
+                      tzOffset => &GetParam('tzoffset', 0));
+  print GetHttpHeader() . $wikiTemplate->process('preferencesEdit');
 }
 
 sub GetFormText {
   my ($name, $default, $size, $max) = @_;
-  my $text = &GetParam($name, $default);
+  my $text = GetParam($name, $default);
 
   return $q->textfield(-name=>"p_$name", -default=>$text,
                        -override=>1, -size=>$size, -maxlength=>$max);
@@ -1496,167 +887,82 @@ sub GetFormText {
 
 sub GetFormCheck {
   my ($name, $default, $label) = @_;
-  my $checked = (&GetParam($name, $default) > 0);
+  my $checked = (GetParam($name, $default) > 0);
 
   return $q->checkbox(-name=>"p_$name", -override=>1, -checked=>$checked,
                       -label=>$label);
 }
 
 sub DoUpdatePrefs {
-  my ($username, $password);
-
-  # All link bar settings should be updated before printing the header
-  &UpdatePrefCheckbox("toplinkbar");
-  &UpdatePrefCheckbox("linkrandom");
-
-  print &GetHeader('','Saving Preferences', '');
-
-  print '<br>';
-
-  if ($UserID < 1001) {
-    print '<b>',
-          "Invalid UserID $UserID, preferences not saved.</b>";
-    if ($UserID == 111) {
-      print '<br>',
-            '(Preferences require cookies, but no cookie was sent.)';
-    }
-    print &GetCommonFooter();
-    return;
-  }
-
-  $username = &GetParam("p_username",  "");
-
-  if ($config->FreeLinks) {
-    $username =~ s/^\[\[(.+)\]\]/$1/;  # Remove [[ and ]] if added
-    $username =  &FreeToNormal($username);
-    $username =~ s/_/ /g;
-  }
-
-  my $linkpattern = $config->LinkPattern;
-  my $freelinkpattern = $config->FreeLinkPattern;
-
-  if ($username eq "") {
-    print 'UserName removed.', '<br>';
-    $user->setField('username', undef);
-  } elsif ((!$config->FreeLinks) && (!($username =~ /^$linkpattern$/))) {
-    print "Invalid UserName $username: not saved.<br>\n";
-  } elsif ($config->FreeLinks && (!($username =~ /^$freelinkpattern$/))) {
-    print "Invalid UserName $username: not saved.<br>\n";
-  } elsif (length($username) > 50) {  # Too long
-    print 'UserName must be 50 characters or less. (not saved)', "<br>\n";
-  } else {
-    print "UserName $username saved.<br>";
-    $user->setField('username', $username);
-  }
-
-  $password = &GetParam("p_password",  "");
-
-  if ($password eq "") {
-    print 'Password removed.', '<br>';
-    $user->setField('password', undef);
-  } elsif ($password ne "*") {
-    print 'Password changed.', '<br>';
-    $user->setField('password', $password);
-  }
-
-  if ($config->AdminPass ne "") {
-    $password = &GetParam("p_adminpw",  "");
-    if ($password eq "") {
-      print 'Administrator password removed.', '<br>';
-      $user->setField('adminpw', undef);
-    } elsif ($password ne "*") {
-      print 'Administrator password changed.', '<br>';
-      $user->setField('adminpw', $password);
-      if (&UserIsAdmin()) {
-        print 'User has administrative abilities.', '<br>';
-      } elsif (&UserIsEditor()) {
-        print 'User has editor abilities.', '<br>';
-      } else {
-        print 'User does not have administrative abilities.', ' ',
-              '(Password does not match administrative password(s).)',
-              '<br>';
+  my $username = &GetParam("p_username",  "");
+  my $errorUserName = 0;
+  if ($username) {
+      if (length($username) > 50) {  # Too long
+          $errorUserName = 1;
       }
-    }
+      elsif ($userDb->idFromUsername($username)) {   # already used
+          $errorUserName = 1;
+      }
+      else {
+          $user->username($username);
+      }
+  }
+  else {
+      $username = $user->username;
   }
 
-  if ($config->EmailNotify) {
-    &UpdatePrefCheckbox("notify");
-    &UpdateEmailList();
+  my $password = &GetParam("p_password",  "");
+
+  my $passwordRemoved = 0;
+  my $passwordChanged = 0;
+  if ($password eq "") {
+      $passwordRemoved = 1;
+      $user->setField('password', undef);
+  }
+  elsif ($password ne "*") {
+      $passwordChanged = 1;
+      $user->setField('password', $password);
   }
 
-  &UpdatePrefNumber("rcdays", 0, 0, 999999);
-  &UpdatePrefCheckbox("rcnewtop");
-  &UpdatePrefCheckbox("rcall");
-  &UpdatePrefCheckbox("rcchangehist");
-  &UpdatePrefCheckbox("editwide");
+  UpdatePrefNumber("rcdays", 0, 0, 999999);
+  UpdatePrefCheckbox("rcnewtop");
+  UpdatePrefCheckbox("rcall");
+  UpdatePrefCheckbox("rcchangehist");
+  UpdatePrefCheckbox("editwide");
 
   if ($config->UseDiff) {
-    &UpdatePrefCheckbox("norcdiff");
-    &UpdatePrefCheckbox("diffrclink");
-    &UpdatePrefCheckbox("alldiff");
-    &UpdatePrefNumber("defaultdiff", 1, 1, 3);
+    UpdatePrefCheckbox("norcdiff");
+    UpdatePrefCheckbox("diffrclink");
+    UpdatePrefCheckbox("alldiff");
+    UpdatePrefNumber("defaultdiff", 1, 1, 3);
   }
 
-  &UpdatePrefNumber("rcshowedit", 1, 0, 2);
-  &UpdatePrefNumber("tzoffset", 0, -999, 999);
-  &UpdatePrefNumber("editrows", 1, 1, 999);
-  &UpdatePrefNumber("editcols", 1, 1, 999);
+  UpdatePrefNumber("rcshowedit", 1, 0, 2);
+  UpdatePrefNumber("tzoffset", 0, -999, 999);
+  UpdatePrefNumber("editrows", 1, 1, 999);
+  UpdatePrefNumber("editcols", 1, 1, 999);
 
-  print 'Server time:', ' ', &TimeToText($Now-$TimeZoneOffset), '<br>';
-  $TimeZoneOffset = &GetParam("tzoffset", 0) * (60 * 60);
-  print 'Local time:', ' ', &TimeToText($Now), '<br>';
+  $TimeZoneOffset = GetParam("tzoffset", 0) * (60 * 60);
 
-  $user->save();
-
-  print '<b>', 'Preferences saved.', '</b>';
-  print &GetCommonFooter();
-}
-
-# add or remove email address from preferences to $DatDir/emails
-sub UpdateEmailList {
-  my (@old_emails);
-
-  local $/ = "\n";  # don't slurp whole files in this sub.
-
-  my $new_email = &GetParam("p_email", "");
-  if ($new_email) {
-    $user->setField('email', $new_email);
-    my $notify = $user->getField('notify');
-    if (-f $config->DataDir . "/emails") {
-      open(NOTIFY, $config->DataDir . "/emails")
-        or die("Could not read from " . $config->DataDir . "/emails: $!\n");
-      @old_emails = <NOTIFY>;
-      close(NOTIFY);
-    } else {
-      @old_emails = ();
-    }
-    my $already_in_list = grep /$new_email/, @old_emails;
-    if ($notify and (not $already_in_list)) {
-      PurpleWiki::Database::RequestLock($config) or die('Could not get mail lock');
-      my $notifyfile = $config->DataDir . '/emails';
-      open(NOTIFY, ">>$notifyfile")
-        or die("Could not append to $notifyfile: $!\n");
-      print NOTIFY $new_email, "\n";
-      close(NOTIFY);
-      PurpleWiki::Database::ReleaseLock($config);
-    }
-    elsif ((not $notify) and $already_in_list) {
-      &PurpleWiki::Database::RequestLock($config) or die('Could not get mail lock');
-      my $notifyfile = $config->DataDir . '/emails';
-      open(NOTIFY, ">$notifyfile")
-        or die("Could not overwrite $notifyfile: $!\n");
-      foreach (@old_emails) {
-        print NOTIFY "$_" unless /$new_email/;
-      }
-      close(NOTIFY);
-      &PurpleWiki::Database::ReleaseLock($config);
-    }
+  if ($errorUserName) {
+      $wikiTemplate->vars(&globalTemplateVars,
+                          userName => undef);
+      print &GetHttpHeader . $wikiTemplate->process('errors/usernameInvalid');
+  }
+  else {
+      $userDb->saveUser($user);
+      $wikiTemplate->vars(&globalTemplateVars,
+                          passwordRemoved => $passwordRemoved,
+                          passwordChanged => $passwordChanged,
+                          serverTime => &TimeToText($Now-$TimeZoneOffset),
+                          localTime => &TimeToText($Now));
+      print &GetHttpHeader . $wikiTemplate->process('preferencesUpdated');
   }
 }
 
 sub UpdatePrefCheckbox {
   my ($param) = @_;
-  my $temp = &GetParam("p_$param", "*");
+  my $temp = GetParam("p_$param", "*");
 
   $user->setField($param, 1)  if ($temp eq "on");
   $user->setField($param, 0)  if ($temp eq "*");
@@ -1665,7 +971,7 @@ sub UpdatePrefCheckbox {
 
 sub UpdatePrefNumber {
   my ($param, $integer, $min, $max) = @_;
-  my $temp = &GetParam("p_$param", "*");
+  my $temp = GetParam("p_$param", "*");
 
   return  if ($temp eq "*");
   $temp =~ s/[^-\d\.]//g;
@@ -1677,116 +983,199 @@ sub UpdatePrefNumber {
 }
 
 sub DoIndex {
-  print &GetHeader('', 'Index of all pages', '');
-  print '<br>';
-  &PrintPageList(&PurpleWiki::Database::AllPagesList($config));
-  print &GetCommonFooter();
+    my @pages = PurpleWiki::Database::AllPagesList($config);
+    my @vPages = &visitedPages;
+
+    $wikiTemplate->vars(&globalTemplateVars,
+                        visitedPages => \@vPages,
+                        pages => \@pages);
+    print GetHttpHeader() . $wikiTemplate->process('pageIndex');
 }
 
 # Create a new user file/cookie pair
 sub DoNewLogin {
-  # Later consider warning if cookie already exists
-  # (maybe use "replace=1" parameter)
-  $user = new PurpleWiki::Database::User(config => $config);
-  my $randkey = int(rand(1000000000));
-  $SetCookie{'id'} = $user->getID();
-  $SetCookie{'randkey'} = $randkey;
-  $SetCookie{'rev'} = 1;
-  $user->setField('randkey', $randkey);
-  $user->setField('rev', 1);
-  %UserCookie = %SetCookie;
-  $UserID = $SetCookie{'id'};
-  # The cookie will be transmitted in the next header
-  $user->setField('createtime', $Now);
-  $user->setField('createip', $ENV{REMOTE_ADDR});
-  $user->save();
+    # Later consider warning if cookie already exists
+    # (maybe use "replace=1" parameter)
+    $user = $userDb->createUser;
+    $user->setField('rev', 1);
+    $user->createTime($Now);
+    $user->createIp($ENV{REMOTE_ADDR});
+    $userDb->saveUser($user);
+
+    $session->param('userId', $user->id);
+}
+
+sub CreateNewUser {  # same as DoNewLogin, but no login
+    # Later consider warning if cookie already exists
+    # (maybe use "replace=1" parameter)
+    $user = $userDb->createUser;
+    $user->setField('rev', 1);
+    $user->createTime($Now);
+    $user->createIp($ENV{REMOTE_ADDR});
+    $userDb->saveUser($user);
+
+    # go back to being a guest
+    my $localId = $user->id;
+    $user = undef;
+    return $localId;
 }
 
 sub DoEnterLogin {
-  print &GetHeader('', 'Login', "");
-  print &GetFormStart();
-  print &GetHiddenValue('enter_login', 1), "\n";
-  print '<br>', 'User ID number:', ' ',
-        $q->textfield(-name=>'p_userid', -value=>'',
-                      -size=>15, -maxlength=>50);
-  print '<br>', 'Password:', ' ',
-        $q->password_field(-name=>'p_password', -value=>'', 
-                           -size=>15, -maxlength=>50);
-  print '<br>', $q->submit(-name=>'Login', -value=>'Login'), "\n";
-  print "<hr>\n";
-  print &GetGotoBar('');
-  print $q->endform;
-  print &GetMinimumFooter();
+    $wikiTemplate->vars(&globalTemplateVars);
+    print GetHttpHeader() . $wikiTemplate->process('login');
 }
 
 sub DoLogin {
-  my ($uid, $password, $success);
+  my $success = 0;
+  my $username = &GetParam("p_username", "");
+  my $password = &GetParam("p_password",  "");
+  $password = '' if ($password eq '*');
 
-  $success = 0;
-  $uid = &GetParam("p_userid", "");
-  $uid =~ s/\D//g;
-  $password = &GetParam("p_password",  "");
-  if (($uid > 199) && ($password ne "") && ($password ne "*")) {
-    $UserID = $uid;
-    $user = new PurpleWiki::Database::User('id' => $UserID, config => $config);
-    if ($user->userExists()) {
-      if (defined($user->getField('password')) &&
-          ($user->getField('password') eq $password)) {
-        $SetCookie{'id'} = $uid;
-        $SetCookie{'randkey'} = $user->getField('randkey');
-        $SetCookie{'rev'} = 1;
-        $success = 1;
-      }
-    }
+  my $userId = $userDb->idFromUsername($username);
+  $user = $userDb->loadUser($userId);
+  if ($user && defined($user->getField('password')) &&
+      ($user->getField('password') eq $password)) {
+      $session->param('userId', $userId);
+      $success = 1;
   }
-  print &GetHeader('', 'Login Results', '');
-  if ($success) {
-    print "Login for user ID $uid complete.";
-  } else {
-    print "Login for user ID $uid failed.";
+  else {
+      $user = undef;
   }
-  print "<hr>\n";
-  print &GetGotoBar('');
-  print $q->endform;
-  print &GetMinimumFooter();
+  $wikiTemplate->vars(&globalTemplateVars,
+                      loginSuccess => $success);
+  print GetHttpHeader() . $wikiTemplate->process('loginResults');
 }
 
+sub DoLogout {
+    if ($config->UseINames && (my $xsid = $session->param('xsid')) ) {
+        my $spit = XDI::SPIT->new;
+        my $iname = $user->username;
+        my ($idBroker, $inumber) = $spit->resolveBroker($iname);
+        $spit->logout($idBroker, $iname, $xsid) if ($idBroker);
+    }
+    $session->delete;
+    my $cookie = $q->cookie(-name => $config->SiteName,
+                            -value => '',
+                            -path => '/cgi-bin/',
+                            -expires => '-1d');
+    my $header;
+    if ($config->HttpCharset ne '') {
+        $header = $q->header(-cookie=>$cookie,
+                             -type=>"text/html; charset=" . $config->HttpCharset);
+    }
+    $header = $q->header(-cookie=>$cookie);
+    $wikiTemplate->vars(&globalTemplateVars,
+                        userName => undef,
+                        prevUserName => $user->username);
+    $user = undef;
+    print $header . $wikiTemplate->process('logout');
+}
+
+sub DoGetIname {
+    my $localId = &CreateNewUser if (!$user);
+    my $spname = $config->ServiceProviderName;
+    my $spkey = $config->ServiceProviderKey;
+    my $rtnUrl = $config->ReturnUrl;
+    my $rsid = &Digest::MD5::md5_hex("$localId$spkey");
+    print "Location: http://dev.idcommons.net/register.html?registry=$spname&local_id=$localId&rsid=$rsid&rtn=$rtnUrl\n\n";
+}
+
+sub DoAssociateIname {
+    my ($iname, $localId, $rrsid) = @_;
+
+    if ( $rrsid = &Digest::MD5::md5_hex($localId . $config->ServiceProviderKey . 'x') &&
+         (!$user) ) {
+        # associate i-name with ID
+        $user = $userDb->loadUser($localId);
+        $user->username($iname);
+        $userDb->saveUser($user);
+        # now login
+        my $spit = XDI::SPIT->new;
+        my ($idBroker, $inumber) = $spit->resolveBroker($iname);
+        if ($idBroker) {
+            my $redirectUrl = $spit->getAuthUrl($idBroker, $iname, $config->ReturnUrl);
+            print "Location: $redirectUrl\n\n";
+        }
+        else {
+            $wikiTemplate->vars(&globalTemplateVars);
+            print &GetHttpHeader . $wikiTemplate->process('errors/inameInvalid');
+        }
+    }
+    else {
+        if ($user) {
+            print STDERR "NOT GUEST USER\n";
+        }
+        $wikiTemplate->vars(&globalTemplateVars);
+        print &GetHttpHeader . $wikiTemplate->process('errors/badInameRegistration');
+    }
+}
+
+sub DoIname {
+    my ($iname, $xsid) = @_;
+
+    my $spit = XDI::SPIT->new;
+    my ($idBroker, $inumber) = $spit->resolveBroker($iname);
+    if ($idBroker) {
+        if ($xsid) {
+            if ($spit->validateSession($idBroker, $iname, $xsid)) {
+                $session->param('xsid', $xsid);
+                my $userId = $userDb->idFromUsername($iname);
+                if ($userId) {
+                    $user = $userDb->loadUser($userId);
+                    $session->param('userId', $userId);
+                }
+                else { # create new account
+                    &DoNewLogin;
+                    $user->username($iname);
+                    $userDb->saveUser($user);
+                }
+                # successful login message
+                $wikiTemplate->vars(&globalTemplateVars,
+                                    loginSuccess => 1);
+                print &GetHttpHeader . $wikiTemplate->process('loginResults');
+            }
+            else { # invalid xsid
+                $wikiTemplate->vars(&globalTemplateVars);
+                print &GetHttpHeader . $wikiTemplate->process('errors/xsidInvalid');
+            }
+        }
+        else {
+            my $redirectUrl = $spit->getAuthUrl($idBroker, $iname, $config->ReturnUrl);
+            print "Location: $redirectUrl\n\n";
+        }
+    }
+    else { # i-name didn't resolve
+        $wikiTemplate->vars(&globalTemplateVars);
+        print &GetHttpHeader . $wikiTemplate->process('errors/inameInvalid');
+    }
+}
 
 sub DoSearch {
-  my ($string) = @_;
+    my ($string) = @_;
 
-  if ($string eq '') {
-    &DoIndex();
-    return;
-  }
-  print &GetHeader('', &QuoteHtml("Search for: $string"), '');
-  print '<br>';
+    if ($string eq '') {
+        DoIndex();
+        return;
+    }
+    # do the new pluggable search
+    my $search = new PurpleWiki::Search::Engine(config => $config);
+    $search->search($string);
 
-  # do the new pluggable search
-  my $search = new PurpleWiki::Search::Engine(config => $config);
-  $search->search($string);
-  print $search->asHTML();
-
-  print &GetCommonFooter();
-}
-
-sub PrintPageList {
-  my $pagename;
-
-  print "<h2>", sprintf("%s pages found:", ($#_ + 1)), "</h2>\n";
-  foreach $pagename (@_) {
-    print ".... "  if ($pagename =~ m|/|);
-    print &GetPageLink($pagename), "<br>\n";
-  }
+    $wikiTemplate->vars(&globalTemplateVars,
+                        keywords => $string,
+                        modules => $search->modules,
+                        results => $search->results);
+    print GetHttpHeader() . $wikiTemplate->process('searchResults');
 }
 
 sub DoPost {
-  my ($editDiff, $old, $newAuthor, $pgtime, $oldrev, $preview, $user);
-  my $string = &GetParam("text", undef);
-  my $id = &GetParam("title", "");
-  my $summary = &GetParam("summary", "");
-  my $oldtime = &GetParam("oldtime", "");
-  my $oldconflict = &GetParam("oldconflict", "");
+  my ($editDiff, $old, $newAuthor, $pgtime, $oldrev, $preview);
+  my $userName = $user ? $user->username : undef;
+  my $string = GetParam("text", undef);
+  my $id = GetParam("title", "");
+  my $summary = GetParam("summary", "");
+  my $oldtime = GetParam("oldtime", "");
+  my $oldconflict = GetParam("oldconflict", "");
   my $isEdit = 0;
   my $editTime = $Now;
   my $authorAddr = $ENV{REMOTE_ADDR};
@@ -1803,28 +1192,29 @@ sub DoPost {
   my $wiki = $wikiParser->parse($string,
                                 'add_node_ids'=>1,
                                 'url'=>$url,
-                                'config' => $config,
                                 'freelink' => $config->FreeLinks);
-  my $output = $wiki->view('wikitext', config => $config);
+  my $output = $wiki->view('wikitext');
 
   $string = $output;
 
   # clean \r out of string
   $string =~ s/\r//g;
 
-  if (!&UserCanEdit($id, 1)) {
-    # This is an internal interface--we don't need to explain
-    &ReportError("Editing not allowed for $id.");
-    return;
+  $wikiTemplate->vars(&globalTemplateVars,
+                      pageName => $id);
+  if (!$acl->canEdit($user, $id)) {
+      # This is an internal interface--we don't need to explain
+      print GetHttpHeader() . $wikiTemplate->process('errors/editNotAllowed');
+      return;
   }
 
   if (($id eq 'SampleUndefinedPage') || ($id eq 'SampleUndefinedPage')) {
-    &ReportError("$id cannot be defined.");
+    print GetHttpHeader() . $wikiTemplate->process('errors/pageCannotBeDefined');
     return;
   }
   if (($id eq 'Sample_Undefined_Page')
       || ($id eq 'Sample_Undefined_Page')) {
-    &ReportError("[[$id]] cannot be defined.");
+    print GetHttpHeader() . $wikiTemplate->process('errors/pageCannotBeDefined');
     return;
   }
   $string =~ s/$fsexp//g;
@@ -1834,13 +1224,11 @@ sub DoPost {
   $string .= "\n"  if (!($string =~ /\n$/));
 
   # Lock before getting old page to prevent races
-  &PurpleWiki::Database::RequestLock($config) or die('Could not get editing lock');
+  PurpleWiki::Database::RequestLock() or die('Could not get editing lock');
   # Consider extracting lock section into sub, and eval-wrap it?
   # (A few called routines can die, leaving locks.)
-  my $keptRevision = new PurpleWiki::Database::KeptRevision(id => $id,
-    config => $config);
-  my $page = new PurpleWiki::Database::Page('id' => $id, 'now' => $Now,
-    config => $config);
+  my $keptRevision = new PurpleWiki::Database::KeptRevision(id => $id);
+  my $page = new PurpleWiki::Database::Page('id' => $id, 'now' => $Now);
   $page->openPage();
   my $text = $page->getText();
   my $section = $page->getSection();
@@ -1849,15 +1237,15 @@ sub DoPost {
   $pgtime = $section->getTS();
 
   $preview = 0;
-  $preview = 1  if (&GetParam("Preview", "") ne "");
+  $preview = 1  if (GetParam("Preview", "") ne "");
   if (!$preview && ($old eq $string)) {  # No changes (ok for preview)
-    &PurpleWiki::Database::ReleaseLock($config);
-    &ReBrowsePage($id, "", 1);
+    PurpleWiki::Database::ReleaseLock();
+    ReBrowsePage($id, "", 1);
     return;
   }
   # Later extract comparison?
-  if (($UserID > 399) || ($section->getID() > 399))  {
-    $newAuthor = ($UserID ne $section->getID());       # known user(s)
+  if ($user || ($section->getID() > 399))  {
+    $newAuthor = ($user->id ne $section->getID());       # known user(s)
   } else {
     $newAuthor = ($section->getIP() ne $authorAddr);  # hostname fallback
   }
@@ -1865,26 +1253,22 @@ sub DoPost {
   $newAuthor = 0  if (!$newAuthor);   # Standard flag form, not empty
   # Detect editing conflicts and resubmit edit
   if (($oldrev > 0) && ($newAuthor && ($oldtime != $pgtime))) {
-    PurpleWiki::Database::ReleaseLock($config);
+    PurpleWiki::Database::ReleaseLock();
     if ($oldconflict>0) {  # Conflict again...
-      &DoEdit($id, 2, $pgtime, $string, $preview);
+      DoEdit($id, 2, $pgtime, $string, $preview);
     } else {
-      &DoEdit($id, 1, $pgtime, $string, $preview);
+      DoEdit($id, 1, $pgtime, $string, $preview);
     }
     return;
   }
   if ($preview) {
-    PurpleWiki::Database::ReleaseLock($config);
-    &DoEdit($id, 0, $pgtime, $string, 1);
+    PurpleWiki::Database::ReleaseLock();
+    DoEdit($id, 0, $pgtime, $string, 1);
     return;
   }
 
-  $user = &GetParam("username", "");
   # If the person doing editing chooses, send out email notification
-  if ($config->EmailNotify) {
-    EmailNotify($page, $id, $user) if &GetParam("do_email_notify", "") eq 'on';
-  }
-  if (&GetParam("recent_edit", "") eq 'on') {
+  if (GetParam("recent_edit", "") eq 'on') {
     $isEdit = 1;
   }
   if (!$isEdit) {
@@ -1906,13 +1290,13 @@ sub DoPost {
 
   if ($config->UseDiff) {
     # FIXME: how many args does it take to screw a pooch?
-    &PurpleWiki::Database::UpdateDiffs($page, $keptRevision, $id, $editTime, $old, $string, $isEdit, $newAuthor, $config);
+    PurpleWiki::Database::UpdateDiffs($page, $keptRevision, $id, $editTime, $old, $string, $isEdit, $newAuthor);
   }
   $text->setText($string);
   $text->setMinor($isEdit);
   $text->setNewAuthor($newAuthor);
   $text->setSummary($summary);
-  $section->setHost(&GetRemoteHost(1));
+  $section->setHost(GetRemoteHost(1));
   # FIXME: redundancy in data structure here
   $section->setRevision($section->getRevision() + 1);
   $section->setTS($Now);
@@ -1922,96 +1306,26 @@ sub DoPost {
   $page->setRevision($section->getRevision());
   $page->setTS($Now);
   $page->save();
-  &WriteRcLog($id, $summary, $isEdit, $editTime, $user, $section->getHost());
-  &PurpleWiki::Database::ReleaseLock($config);
+  &WriteRcLog($id, $summary, $isEdit, $editTime, $userName, $section->getHost());
+  &PurpleWiki::Database::ReleaseLock();
   &ReBrowsePage($id, "", 1);
-}
-
-# Translation note: the email messages are still sent in English
-# Send an email message.
-sub SendEmail {
-  my ($to, $from, $reply, $subject, $message) = @_;
-    ### debug
-    ## print "Content-type: text/plain\n\n";
-    ## print " to: '$to'\n";
-    ## return;
-  # sendmail options:
-  #    -odq : send mail to queue (i.e. later when convenient)
-  #    -oi  : do not wait for "." line to exit
-  #    -t   : headers determine recipient.
-  my $sendmail = $config->SendMail;
-  open (SENDMAIL, "| $sendmail -oi -t ") or die "Can't send email: $!\n";
-  print SENDMAIL <<"EOF";
-From: $from
-To: $to
-Reply-to: $reply
-Subject: $subject\n
-$message
-EOF
-  close(SENDMAIL) or warn "sendmail didn't close nicely";
-}
-
-## Email folks who want to know a note that a page has been modified. - JimM.
-sub EmailNotify {
-  local $/ = "\n";   # don't slurp whole files in this sub.
-  if ($config->EmailNotify) {
-    my ($page, $id, $user) = @_;
-    if ($user) {
-      $user = " by $user";
-    }
-    my $address;
-    my $emailfile = $config->DataDir . '/emails';
-    open(EMAIL, "$emailfile")
-      or die "Can't open $emailfile: $!\n";
-    $address = join ",", <EMAIL>;
-    $address =~ s/\n//g;
-    close(EMAIL);
-    my $revision = $page->getRevision();
-    my $home_url = $q->url();
-    my $page_url = $home_url . "?$id";
-    my $editors_summary = $q->param("summary");
-    if (($editors_summary eq "*") or ($editors_summary eq "")){
-      $editors_summary = "";
-    }
-    else {
-      $editors_summary = "\n Summary: $editors_summary";
-    }
-    my $content = <<"END_MAIL_CONTENT";
-
- The $config->SiteName page $id at
-   $page_url
- has been changed$user to revision $revision . $editors_summary
-
- (Replying to this notification will
-  send email to the entire mailing list,
-  so only do that if you mean to.
-
-  To remove yourself from this list, visit
-  ${home_url}?action=editprefs .)
-END_MAIL_CONTENT
-    my $subject = "The $id page at " . $config->SiteName . " has been changed.";
-    # I'm setting the "reply-to" field to be the same as the "to:" field
-    # which seems appropriate for a mailing list, especially since the
-    # $EmailFrom string needn't be a real email address.
-    &SendEmail($address, $config->EmailFrom, $address, $subject, $content);
-  }
 }
 
 # Note: all diff and recent-list operations should be done within locks.
 sub DoUnlock {
-  my $LockMessage = 'Normal Unlock.';
+    my $forcedUnlock = 0;
 
-  print &GetHeader('', 'Removing edit lock', '');
-  print '<p>', 'This operation may take several seconds...', "\n";
-  if (&PurpleWiki::Database::ForceReleaseLock('main', $config)) {
-    $LockMessage = 'Forced Unlock.';
-  }
-  # Later display status of other locks?
-  &PurpleWiki::Database::ForceReleaseLock('cache', $config);
-  &PurpleWiki::Database::ForceReleaseLock('diff', $config);
-  &PurpleWiki::Database::ForceReleaseLock('index', $config);
-  print "<br><h2>$LockMessage</h2>";
-  print &GetCommonFooter();
+    if (PurpleWiki::Database::ForceReleaseLock('main', $config)) {
+        $forcedUnlock = 1;
+    }
+    # Later display status of other locks?
+    PurpleWiki::Database::ForceReleaseLock('cache', $config);
+    PurpleWiki::Database::ForceReleaseLock('diff', $config);
+    PurpleWiki::Database::ForceReleaseLock('index', $config);
+    $wikiTemplate->vars(&globalTemplateVars,
+                        forcedUnlock => $forcedUnlock);
+    print GetHttpHeader() . $wikiTemplate->process('removeEditLock');
+
 }
 
 # Note: all diff and recent-list operations should be done within locks.
@@ -2020,7 +1334,7 @@ sub WriteRcLog {
   my ($extraTemp, %extra);
 
   %extra = ();
-  $extra{'id'} = $UserID  if ($UserID > 0);
+  $extra{'id'} = $user->id  if ($user);
   $extra{'name'} = $name  if ($name ne "");
   $extraTemp = join($config->FS2, %extra);
   # The two fields at the end of a line are kind and extension-hash
@@ -2034,231 +1348,212 @@ sub WriteRcLog {
   close(OUT);
 }
 
-sub UserIsAdminOrError {
-  if (!&UserIsAdmin()) {
-    print '<p>', 'This operation is restricted to administrators only...';
-    print &GetCommonFooter();
-    return 0;
-  }
-  return 1;
-}
-
-sub DoEditLock {
-  my ($fname);
-
-  print &GetHeader('', 'Set or Remove global edit lock', '');
-  return  if (!&UserIsAdminOrError());
-  $fname = $config->DataDir . '/noedit';
-  if (&GetParam("set", 1)) {
-    PurpleWiki::Database::WriteStringToFile($fname, "editing locked.");
-  } else {
-    unlink($fname);
-  }
-  if (-f $fname) {
-    print '<p>', 'Edit lock created.', '<br>';
-  } else {
-    print '<p>', 'Edit lock removed.', '<br>';
-  }
-  print &GetCommonFooter();
-}
-
-sub DoPageLock {
-  my ($fname, $id);
-
-  print &GetHeader('', 'Set or Remove page edit lock', '');
-  # Consider allowing page lock/unlock at editor level?
-  return  if (!&UserIsAdminOrError());
-  $id = &GetParam("id", "");
-  if ($id eq "") {
-    print '<p>', 'Missing page id to lock/unlock...';
-    return;
-  }
-  return  if (!&ValidIdOrDie($id));       # Later consider nicer error?
-  my $page = new PurpleWiki::Database::Page('id' => $id, config => $config);
-  $fname = $page->getLockedPageFile();
-  if (&GetParam("set", 1)) {
-    PurpleWiki::Database::WriteStringToFile($fname, "editing locked.");
-  } else {
-    unlink($fname);
-  }
-  if (-f $fname) {
-    print '<p>', "Lock for $id created.", '<br>';
-  } else {
-    print '<p>', "Lock for $id removed.", '<br>';
-  }
-  print &GetCommonFooter();
-}
-
-sub DoEditBanned {
-  my ($banList, $status);
-
-  print &GetHeader("", "Editing Banned list", "");
-  return  if (!&UserIsAdminOrError());
-  ($status, $banList) = &PurpleWiki::Database::ReadFile($config->DataDir .
-      '/banlist');
-  $banList = ""  if (!$status);
-  print &GetFormStart();
-  print GetHiddenValue("edit_ban", 1), "\n";
-  print "<b>Banned IP/network/host list:</b><br>\n";
-  print "<p>Each entry is either a commented line (starting with #), ",
-        "or a Perl regular expression (matching either an IP address or ",
-        "a hostname).  <b>Note:</b> To test the ban on yourself, you must ",
-        "give up your admin access (remove password in Preferences).";
-  print "<p>Examples:<br>",
-        "\\.foocorp.com\$  (blocks hosts ending with .foocorp.com)<br>",
-        "^123.21.3.9\$  (blocks exact IP address)<br>",
-        "^123.21.3.  (blocks whole 123.21.3.* IP network)<p>";
-  print &GetTextArea('banlist', $banList, 12, 50);
-  print "<br>", $q->submit(-name=>'Save'), "\n";
-  print "<hr>\n";
-  print &GetGotoBar("");
-  print $q->endform;
-  print &GetMinimumFooter();
-}
-
-sub DoUpdateBanned {
-  my ($newList, $fname);
-
-  print &GetHeader("", "Updating Banned list", "");
-  return  if (!&UserIsAdminOrError());
-  $fname = $config->DataDir . '/banlist';
-  $newList = &GetParam("banlist", "#Empty file");
-  if ($newList eq "") {
-    print "<p>Empty banned list or error.";
-    print "<p>Resubmit with at least one space character to remove.";
-  } elsif ($newList =~ /^\s*$/s) {
-    unlink($fname);
-    print "<p>Removed banned list";
-  } else {
-    PurpleWiki::Database::WriteStringToFile($fname, $newList);
-    print "<p>Updated banned list";
-  }
-  print &GetCommonFooter();
-}
-
-sub DoShowVersion {
-  print &GetHeader("", "Displaying Wiki Version", "");
-  print "<p>UseModWiki version 0.92<p>\n";
-  print &GetCommonFooter();
-}
 # ==== Difference markup and HTML ====
-sub GetDiffHTML {
-    my $page = shift;
-    my $keptRevision = shift;
-  my $diffType = shift;
-  my $id = shift;
-  my $rev = shift;
-  my $newText = shift;
-  my ($html, $diffText, $diffTextTwo, $priorName, $links, $usecomma);
-  my ($major, $minor, $author, $useMajor, $useMinor, $useAuthor, $cacheName);
+sub DoDiff {
+    my ($page, $keptRevision, $diffType, $id, $pageName, $lastEdited,
+        $rev, $newText) = @_;
+    my $cacheName;
+    my $diffText;
+    my $diffTypeString;
+    my @diffLinks;
+    my $noDiff = 0;
 
-  $links = "(";
-  $usecomma = 0;
-  $major  = &ScriptLinkDiff(1, $id, 'major diff', "");
-  $minor  = &ScriptLinkDiff(2, $id, 'minor diff', "");
-  $author = &ScriptLinkDiff(3, $id, 'author diff', "");
-  $useMajor  = 1;
-  $useMinor  = 1;
-  $useAuthor = 1;
-  if ($diffType == 1) {
-    $priorName = 'major';
-    $cacheName = 'major';
-    $useMajor  = 0;
-  } elsif ($diffType == 2) {
-    $priorName = 'minor';
-    $cacheName = 'minor';
-    $useMinor  = 0;
-  } elsif ($diffType == 3) {
-    $priorName = 'author';
-    $cacheName = 'author';
-    $useAuthor = 0;
-  }
-  if ($rev ne "") {
-    $diffText = PurpleWiki::Database::GetKeptDiff($keptRevision,
-                              $newText, $rev, 1);  # 1 = get lock
-    if ($diffText eq "") {
-      $diffText = '(The revisions are identical or unavailable.)';
+    my $useMajor = 1;
+    my $useMinor = 1;
+    my $useAuthor = 1;
+    if ($diffType == 1) {
+        $diffTypeString = 'major';
+        $cacheName = 'major';
+        $useMajor = 0;
     }
-  } else {
-    $diffText  = &PurpleWiki::Database::GetCacheDiff($page, $cacheName);
-  }
-  $useMajor  = 0  if ($useMajor  && ($diffText eq PurpleWiki::Database::GetCacheDiff($page, "major")));
-  $useMinor  = 0  if ($useMinor  && ($diffText eq PurpleWiki::Database::GetCacheDiff($page, "minor")));
-  $useAuthor = 0  if ($useAuthor && ($diffText eq PurpleWiki::Database::GetCacheDiff($page, "author")));
-  $useMajor  = 0  if ((!defined($page->getPageCache('oldmajor'))) ||
-                      ($page->getPageCache("oldmajor") < 1));
-  $useAuthor = 0  if ((!defined($page->getPageCache('oldauthor'))) ||
-                      ($page->getPageCache("oldauthor") < 1));
-  if ($useMajor) {
-    $links .= $major;
-    $usecomma = 1;
-  }
-  if ($useMinor) {
-    $links .= ", "  if ($usecomma);
-    $links .= $minor;
-    $usecomma = 1;
-  }
-  if ($useAuthor) {
-    $links .= ", "  if ($usecomma);
-    $links .= $author;
-  }
-  if (!($useMajor || $useMinor || $useAuthor)) {
-    $links .= 'no other diffs';
-  }
-  $links .= ")";
-
-  if ((!defined($diffText)) || ($diffText eq "")) {
-    $diffText = 'No diff available.';
-  }
-  if ($rev ne "") {
-    $html = '<b>'
-            . "Difference (from revision $rev to current revision"
-            . "</b>\n" . "$links<br>" . &DiffToHTML($diffText) . "<hr>\n";
-  } else {
-    if (($diffType != 2) &&
+    elsif ($diffType == 2) {
+        $diffTypeString = 'minor';
+        $cacheName = 'minor';
+        $useMinor = 0;
+    }
+    elsif ($diffType == 3) {
+        $diffTypeString = 'author';
+        $cacheName = 'author';
+        $useAuthor = 0;
+    }
+    if ($rev ne "") {
+        $diffText = PurpleWiki::Database::GetKeptDiff($keptRevision,
+                                                      $newText, $rev, 1);  # 1 = get lock
+        if ($diffText eq "") {
+            $diffText = '(The revisions are identical or unavailable.)';
+        }
+    }
+    else {
+        $diffText  = PurpleWiki::Database::GetCacheDiff($page, $cacheName);
+    }
+    $useMajor  = 0 
+        if ($useMajor  && ($diffText eq PurpleWiki::Database::GetCacheDiff($page, "major")));
+    $useMinor  = 0 
+        if ($useMinor  && ($diffText eq PurpleWiki::Database::GetCacheDiff($page, "minor")));
+    $useAuthor = 0 
+        if ($useAuthor && ($diffText eq PurpleWiki::Database::GetCacheDiff($page, "author")));
+    $useMajor  = 0
+        if ((!defined($page->getPageCache('oldmajor'))) ||
+            ($page->getPageCache("oldmajor") < 1));
+    $useAuthor = 0
+        if ((!defined($page->getPageCache('oldauthor'))) ||
+            ($page->getPageCache("oldauthor") < 1));
+    push @diffLinks, { type => 'major', url => $config->ScriptName . "?action=browse&amp;diff=1&amp;id=$id" }
+        if ($useMajor);
+    push @diffLinks, { type => 'minor', url => $config->ScriptName . "?action=browse&amp;diff=2&amp;id=$id" }
+        if ($useMinor);
+    push @diffLinks, { type => 'author', url => $config->ScriptName . "?action=browse&amp;diff=3&amp;id=$id" }
+        if ($useAuthor);
+    if (($rev eq '') && ($diffType != 2) &&
         ((!defined($page->getPageCache("old$cacheName"))) ||
          ($page->getPageCache("old$cacheName") < 1))) {
-      $html = '<b>'
-              . "No diff available--this is the first $priorName revision."
-              . "</b>\n$links<hr>";
-    } else {
-      $html = '<b>'
-              . "Difference (from prior $priorName revision)"
-              . "</b>\n$links<br>" . &DiffToHTML($diffText) . "<hr>\n";
+        $noDiff = 1;
     }
-  }
-  return $html;
+    $wikiTemplate->vars(&globalTemplateVars,
+                        pageName => $pageName,
+                        revision => $rev,
+                        diffType => $diffTypeString,
+                        diffLinks => \@diffLinks,
+                        nodiff => $noDiff,
+                        diffs => getDiffs($diffText),
+                        lastEdited => $lastEdited,
+                        pageUrl => $config->ScriptName . "?$id",
+                        backlinksUrl => $config->ScriptName . "?search=$id",
+                        revisionsUrl => $config->ScriptName . "?action=history&amp;id=$id");
+    print GetHttpHeader() . $wikiTemplate->process('viewDiff');
 }
 
-sub DiffToHTML {
-  my ($html) = @_;
-  my ($tChanged, $tRemoved, $tAdded);
+# @diffs = ( { type => (status|removed|added), text => [] }, ... )
+sub getDiffs {
+    my $diffText = shift;
+    my @diffs;
 
-  $tChanged = 'Changed:';
-  $tRemoved = 'Removed:';
-  $tAdded   = 'Added:';
-  $html =~ s/\n--+//g;
-  # Note: Need spaces before <br> to be different from diff section.
-  $html =~ s/(^|\n)(\d+.*c.*)/$1 <br><strong>$tChanged $2<\/strong><br>/g;
-  $html =~ s/(^|\n)(\d+.*d.*)/$1 <br><strong>$tRemoved $2<\/strong><br>/g;
-  $html =~ s/(^|\n)(\d+.*a.*)/$1 <br><strong>$tAdded $2<\/strong><br>/g;
-  $html =~ s/\n((<.*\n)+)/&ColorDiff($1,"ffffaf")/ge;
-  $html =~ s/\n((>.*\n)+)/&ColorDiff($1,"cfffcf")/ge;
-  return $html;
+    my $added;
+    my $removed;
+    foreach my $line (split /\n/, $diffText) {
+        my $statusMessage;
+        if ($line =~ /^(\d+.*[adc].*)/) {
+            my $statusMessage = $1;
+            my $statusType;
+            if ($statusMessage =~ /a/) {
+                $statusType = 'Added: ';
+            }
+            elsif ($statusMessage =~ /d/) {
+                $statusType = 'Removed: ';
+            }
+            else {
+                $statusType = 'Changed: ';
+            }
+            if ($added) {
+                $added = QuoteHtml($added);
+                $added =~ s/\n/<br \/>\n/sg;
+                push @diffs, { type => 'added', text => $added };
+                $added = '';
+            }
+            elsif ($removed) {
+                $removed = QuoteHtml($removed);
+                $removed =~ s/\n/<br \/>\n/sg;
+                push @diffs, { type => 'removed', text => $removed };
+                $removed = '';
+            }
+            push @diffs, { type => 'status', text => "$statusType$statusMessage" };
+        }
+        elsif ($line =~ /^</) { # removed
+            if ($added) {
+                $added = QuoteHtml($added);
+                $added =~ s/\n/<br \/>\n/sg;
+                push @diffs, { type => 'added', text => $added };
+                $added = '';
+            }
+            $line =~ s/^< //;
+            $removed .= "$line\n";
+        }
+        elsif ($line =~ /^>/) { # added
+            if ($removed) {
+                $removed = QuoteHtml($removed);
+                $removed =~ s/\n/<br \/>\n/sg;
+                push @diffs, { type => 'removed', text => $removed };
+                $removed = '';
+            }
+            $line =~ s/^> //;
+            $added .= "$line\n";
+        }
+    }
+    if ($added) {
+        $added = QuoteHtml($added);
+        $added =~ s/\n/<br \/>\n/sg;
+        push @diffs, { type => 'added', text => $added };
+        $added = '';
+    }
+    elsif ($removed) {
+        $removed = QuoteHtml($removed);
+        $removed =~ s/\n/<br \/>\n/sg;
+        push @diffs, { type => 'removed', text => $removed };
+        $removed = '';
+    }
+    return \@diffs;
 }
 
-sub ColorDiff {
-  my ($diff, $color) = @_;
+sub logSession {
+    open FH, ">>$CONFIG_DIR/session_log";
+    print FH time . "\t" . $session->id . "\t" . $q->request_method . "\t";
+    print FH $q->query_string if ($q->request_method ne 'POST');
+    print FH "\t" . $q->remote_host . "\t" . $session->param('userId') . "\t" .
+        $q->referer . "\n";
+    close FH;
+}
 
-  $diff =~ s/(^|\n)[<>]/$1/g;
-  $diff =  $wikiParser->parse($diff,
-                              'freelink' => $config->FreeLinks,
-                              'config' => $config,
-                              'add_node_ids' => 0)->view('wikitext',
-                                                         config => $config);
-  $diff =~ s/\r?\n/<br>/g;
-  return "<table width=\"95\%\" bgcolor=#$color><tr><td>\n" . $diff
-         . "</td></tr></table>\n";
+sub updateVisitedPagesCache {
+    my $id = shift;
+
+    my @pages = keys %{$visitedPagesCache};
+    if (!defined $visitedPagesCache->{$id} &&
+        (scalar @pages - 1 >= $visitedPagesCacheSize)) {
+        my @oldestPages = sort {
+            $visitedPagesCache->{$a} <=> $visitedPagesCache->{$b}
+        } @pages;
+        my $remove = scalar @pages - $visitedPagesCacheSize + 1;
+        for (my $i = 0; $i < $remove; $i++) {
+            delete $visitedPagesCache->{$oldestPages[$i]};
+        }
+    }
+    $visitedPagesCache->{$id} = time;
+    $session->param('visitedPagesCache', $visitedPagesCache);
+}
+
+sub visitedPages {
+    my @pages = sort { $visitedPagesCache->{$b} <=> $visitedPagesCache->{$a} }
+        keys %{$visitedPagesCache};
+    my $i = 0;
+    foreach my $id (@pages) {
+        my $pageName = $id;
+        $pageName =~ s/_/ /g if ($config->FreeLinks);
+        $pages[$i] = {
+            'id' => $id,
+            'pageName' => $pageName,
+        };
+        $i++;
+    };
+    return @pages;
+}
+
+sub expandPageName {
+    my $pageName = shift;
+
+    if ($pageName !~ / /) {
+        $pageName =~ s/([a-z])([A-Z])/$1 $2/g;
+        $pageName =~ s/([0-9])([A-Z])/$1 $2/g;
+        $pageName =~ s/([a-z])([0-9])/$1 $2/g;
+    }
+    return $pageName;
+}
+
+sub globalTemplateVars {
+    return (siteName => $config->SiteName,
+            baseUrl => $config->ScriptName,
+            homePage => $config->HomePage,
+            userName => $user ? $user->username : undef,
+            preferencesUrl => $config->ScriptName . '?action=editprefs');
 }
 
 &DoWikiRequest()  if ($config->RunCGI && ($_ ne 'nocgi'));   # Do everything.

@@ -1,7 +1,7 @@
 # PurpleWiki::Apache1Handler.pm
 # vi:ai:sw=4:ts=4:et:sm
 #
-# $Id: Apache1Handler.pm,v 1.3 2004/02/12 18:58:35 cdent Exp $
+# $Id: Apache1Handler.pm 465 2004-08-09 02:00:02Z cdent $
 #
 # Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
 #
@@ -37,11 +37,9 @@ use PurpleWiki::Parser::WikiText;
 use Apache;
 use Apache::Constants;
 use Apache::URI;
-use vars qw($VERSION);
-$VERSION = '0.9.2';
 
-my $CONFIG = '/home/kb-dev/wikidata';
-my $CSS = '/css/purple.css';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Apache1Handler.pm 465 2004-08-09 02:00:02Z cdent $ =~ /\s(\d+)\s/);
 
 sub handler {
     my $r = shift;
@@ -52,21 +50,25 @@ sub handler {
     my $url = Apache::URI->parse($r)->unparse();
 
     my $content = readFile($file);
+    my $CONFIG = $ENV{WIKIDB};
     my $purpleConfig = new PurpleWiki::Config($CONFIG);
     my $wikiParser = new PurpleWiki::Parser::WikiText();
     my $wiki = $wikiParser->parse($content, 
-        config => $purpleConfig,
         wikiword => 1,
-        css_file => $CSS,
         url => $url,
     );
 
-    $r->print($wiki->view('xhtml', 
-        config => $purpleConfig,
-        wikiword => 1,
-        css_file => $CSS,
-        url => $url,
-    ));
+    # select and load a template driver
+    my $templateDriver = $purpleConfig->TemplateDriver();
+    my $templateClass = "PurpleWiki::Template::$templateDriver";
+    eval "require $templateClass";
+    my $wikiTemplate = $templateClass->new;
+    $wikiTemplate->vars( body => $wiki->view('wikihtml', 
+                                              wikiword => 1,
+                                              url => $url),
+                         title => $wiki->title,
+                         date => $wiki->date );
+    $r->print($wikiTemplate->process('handler'));
 
     return OK;
 
@@ -98,14 +100,16 @@ PurpleWiki::Apache1Handler - Wiki text display handler for mod_perl 1
   # OR PerlSetEnv PERL5LIB /path/to/PurpleWiki
   <FilesMatch *\.wiki>
       SetHandler perl-script
-      PerlResponseHandler  PurpleWiki::Apache1Handler
+      PerlSetEnv WIKIDB /path/to/wikidb
+      PerlHandler  PurpleWiki::Apache1Handler
   </FilesMatch>
 
 =head1 DESCRIPTION
 
 A simple display handler for web content files that are formatted
 as PurpleWiki wikitext. The handler reads in the *.wiki file, parses
-it to a PurpleWiki::Tree and presents it as PurpleWiki::View::xhtml.
+it to a PurpleWiki::Tree and presents it using the template defined
+in wikidb/template/handler.tt.
 
 =head1 METHODS
 

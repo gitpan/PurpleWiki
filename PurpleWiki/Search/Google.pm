@@ -1,7 +1,7 @@
 # PurpleWiki::Search::Google.pm
 # vi:ai:sm:et:sw=4:ts=4
 #
-# $Id: Google.pm,v 1.3 2004/01/21 23:24:08 cdent Exp $
+# $Id: Google.pm 364 2004-05-19 18:15:26Z eekim $
 #
 # This file is part of PurpleWiki.  PurpleWiki is derived from:
 #
@@ -32,8 +32,8 @@ use strict;
 use base 'PurpleWiki::Search::Interface';
 use PurpleWiki::Search::Result;
 
-use vars qw($VERSION);
-$VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Google.pm 364 2004-05-19 18:15:26Z eekim $ =~ /\s(\d+)\s/);
 
 # Where the searching is done.
 sub search {
@@ -56,9 +56,9 @@ sub search {
     if (@{$result->{resultElements}} > 0) {
         foreach my $element (@{$result->{resultElements}}) {
             my $result = new PurpleWiki::Search::Result;
-            $result->setURL($element->{URL});
-            $result->setTitle($element->{title});
-            $result->setSummary($element->{snippet});
+            $result->url($element->{URL});
+            $result->title($element->{title});
+            $result->summary($element->{snippet});
             push(@results, $result);
         }
     }

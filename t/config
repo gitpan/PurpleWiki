@@ -8,13 +8,10 @@
 # commented out.
 
 ScriptName  = /example/testwiki.cgi # The name of the wiki script, for use in urls
-CookieName  = TestWiki      # Name for this wiki (for multi-wiki sites)
+ScriptDir = /cgi-bin/
 SiteName    = TestWiki          # Name of site (used for titles)
 HomePage    = FrontPage       # Home page (change space to _)
 RCName      = RecentChanges   # Name of changes page (change space to _)
-#LogoUrl     = ""             # URL for site logo (empty for none)
-#StyleSheet  = ""             # URL for CSS stylesheet (like "/wiki.css")
-#SiteBase    = ""             # Full URL for <BASE> header
 #FullUrl     = ""             # Set if the auto-detected URL is wrong
 #ScriptTZ    = ""             # Local time zone
 LocalSequenceDir = "t"
@@ -33,20 +30,15 @@ KeepDays    = 14               # Days to keep old revisions
 #AdminPass   = ""              # Set to non-blank to enable password(s)
 #EditPass    = ""              # Like AdminPass, but for editing only
 
-# Email Notifications
-EmailFrom   = Wiki           # Text for "From: " field of email notes.
-SendMail    = /usr/sbin/sendmail   # Full path to sendmail executable
-
 # HTML additions and characteristics
-#FooterNote  = ""             # HTML for bottom of every page
-#EditNote    = ""             # HTML notice above buttons on edit page
-#UserGotoBar = ""             # HTML added to end of goto bar
 #HttpCharset = ""             # Charset for pages, like "iso-8859-2"
 
 # Post sizes
 MaxPost     = 215040           # Maximum 210K posts (about 200K for pages)
 
 # Major options:
+#LoginToEdit            # require logged in user to edit pages
+#UseINames              # if set use i-names
 UseSubpage             # if set allow subpages
 EditAllowed            # if set editing allowed
 UseDiff                # if set use diff features
@@ -54,10 +46,15 @@ FreeLinks              # if set use [[word]] links
 WikiLinks              # if set use LinkPattern
 AdminDelete            # if set Admin only page
 RunCGI                 # if set Run script as CGI
-#EmailNotify            # if set use email notices
-#EmbedWiki              # if set no headers/footers
 #NonEnglish             # non english characters in links?
 #SimpleLink
+
+# Create Link Options
+#CreateLinkBefore       # if set, puts create link (?) before the text
+                       # (PHPWiki-style)
+CreateLinkText = "?"   # text displayed in create link.  If not set,
+                       # displays the link using the "create" CSS style (
+                       # (MoinMoin and SocialText-style)
 
 # Minor options:
 RecentTop              # if set recent on top
@@ -66,9 +63,7 @@ KeepMajor              # if set keep major rev
 KeepAuthor             # if set keep author rev
 BracketText            # if set allow [URL text]
 UseAmPm                # if set use am/pm in times
-UseLookup              # if set lookup host names
 FreeUpper              # if set force upper case
-#LogoLeft              # if set logo on left
 #ShowEdits             # if set show minor edits
 
 # == You should not have to change anything below this line. =============

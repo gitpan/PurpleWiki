@@ -7,7 +7,8 @@ use PurpleWiki::View::Driver;
 
 ############### Package Globals ###############
 
-our $VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: subtree.pm 366 2004-05-19 19:22:17Z eekim $ =~ /\s(\d+)\s/);
 
 our @ISA = qw(PurpleWiki::View::Driver);
 
@@ -79,10 +80,9 @@ for doing transclusion or removing slices from a tree.
 
 =head1 METHODS
 
-=head2 new(config => $config, nid => $nid)
+=head2 new(nid => $nid)
 
-Returns a new PurpleWiki::View::subtree object.  $config is the standard
-PurpleWiki::Config object.
+Returns a new PurpleWiki::View::subtree object.
 
 nid is a PurpleWiki NID for the given node you're searching for.  It is an
 error to not supply nid.

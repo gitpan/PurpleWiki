@@ -1,7 +1,7 @@
 # PurpleWiki::Database::KeptRevision
 # vi:sw=4:ts=4:ai:sm:et:tw=0
 #
-# $Id: KeptRevision.pm,v 1.5 2004/01/21 23:24:08 cdent Exp $
+# $Id: KeptRevision.pm 399 2004-06-25 05:31:46Z cdent $
 #
 # Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
 #
@@ -32,14 +32,15 @@ package PurpleWiki::Database::KeptRevision;
 
 # PurpleWiki Page Data Access
 
-# $Id: KeptRevision.pm,v 1.5 2004/01/21 23:24:08 cdent Exp $
+# $Id: KeptRevision.pm 399 2004-06-25 05:31:46Z cdent $
 
 use strict;
+use PurpleWiki::Config;
 use PurpleWiki::Database;
 use PurpleWiki::Database::Section;
 
-use vars qw($VERSION);
-$VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: KeptRevision.pm 399 2004-06-25 05:31:46Z cdent $ =~ /\s(\d+)\s/);
 
 # Creates a new kept revision reference
 # Really just a collection of Sections
@@ -51,7 +52,7 @@ sub new {
     bless ($self, $class);
 
     $self->{id} = $params{id};
-    $self->{config} = $params{config};
+    $self->{config} = PurpleWiki::Config->instance();
     $self->{sections} = ();
     $self->_makeKeptList();
 
@@ -72,14 +73,27 @@ sub hasRevision {
     my $self = shift;
     my $revision = shift;
 
-    return (ref($self->{sections}->[$revision - 1]));
+    # FIXME: a hash of revision number to sections is
+    # probably in order
+    foreach my $section (@{$self->{sections}}) {
+        my $sectionRevision = $section->getRevision();
+        return 1 if $revision == $sectionRevision;
+    }
+    return 0;
 }
 
 # Retrieves the Section representing to a particular revision
 sub getRevision {
     my $self = shift;
     my $revision = shift;
-    return $self->{sections}->[$revision - 1]; 
+
+    foreach my $section (@{$self->{sections}}) {
+        my $sectionRevision = $section->getRevision();
+        return $section if $revision == $sectionRevision;
+    }
+    # FIXME, should probably error here, for now return
+    # most recent
+    return pop(@{$self->{sections}});
 }
 
 # Adds the provided Section to this KeptRevision
@@ -153,8 +167,8 @@ sub _parseData {
         # field is empty
         if (length($section)) {
             push(@{$self->{sections}}, 
-                new PurpleWiki::Database::Section('data' => $section,
-                        'config' => $self->{config}));
+                new PurpleWiki::Database::Section('data' => $section));
+                       
         }
     }
 

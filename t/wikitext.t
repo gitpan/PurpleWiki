@@ -1,9 +1,10 @@
 # wikitext.t
 
 use strict;
+use warnings;
 use Test;
 
-BEGIN { plan tests => 21 };
+BEGIN { plan tests => 24 };
 
 use IO::File;
 use PurpleWiki::Parser::WikiText;
@@ -32,15 +33,17 @@ my $config = new PurpleWiki::Config($configdir);
 my $wikiParser = PurpleWiki::Parser::WikiText->new;
 my ($input, $output, $shouldBe, $wiki);
 
-my @files = qw(tree_hr tree_lists tree_test01 tree_test02 tree_test03
+my @files = qw(tree_freelinks tree_hr tree_interlinks tree_lists tree_pre
+               tree_mixedlists
+               tree_test01 tree_test02 tree_test03
                tree_test04 tree_test05 tree_test06 tree_test07 tree_test08
-               tree_test09 tree_test10 tree_test11 tree_test12
+               tree_test09 tree_test11 tree_test12
                hr1 hr2 hr3 hr4 hr5 hr6 hr7);
 
 foreach my $filename (@files) {
     $input = &readFile("t/txt/$filename.txt");
     $shouldBe = &readFile("t/output/$filename.txt");
-    $wiki = $wikiParser->parse($input, config => $config);
-    $output = $wiki->view('wikitext', config => $config);
+    $wiki = $wikiParser->parse($input);
+    $output = $wiki->view('wikitext');
     ok($output eq $shouldBe);
 }

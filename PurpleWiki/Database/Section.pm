@@ -1,7 +1,7 @@
 # PurpleWiki::Database::Section
 # vi:sw=4:ts=4:ai:sm:et:tw=0
 #
-# $Id: Section.pm,v 1.5 2004/01/21 23:24:08 cdent Exp $
+# $Id: Section.pm 428 2004-07-26 00:46:41Z cdent $
 #
 # Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
 #
@@ -32,13 +32,14 @@ package PurpleWiki::Database::Section;
 
 # PurpleWiki Section Data Access
 
-# $Id: Section.pm,v 1.5 2004/01/21 23:24:08 cdent Exp $
+# $Id: Section.pm 428 2004-07-26 00:46:41Z cdent $
 
 use strict;
+use PurpleWiki::Config;
 use PurpleWiki::Database::Text;
 
-use vars qw($VERSION);
-$VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Section.pm 428 2004-07-26 00:46:41Z cdent $ =~ /\s(\d+)\s/);
 
 # Creates a new Section reference, may be a
 # a new one or an existing one. Arguments
@@ -57,7 +58,7 @@ sub new {
     my $class = ref($proto) || $proto;
     my $self = {};
     bless ($self, $class);
-    $self->{config} = $params{config};
+    $self->{config} = PurpleWiki::Config->instance();
     $self->_init(@_);
     return $self;
 }
@@ -67,8 +68,8 @@ sub getText {
     my $self = shift;
 
     if (!ref($self->{data})) {
-        $self->{data} = new PurpleWiki::Database::Text(data => $self->{data},
-            config => $self->{config});
+        $self->{data} = new PurpleWiki::Database::Text(data => $self->{data});
+          
     }
     return $self->{data};
 }
@@ -176,7 +177,7 @@ sub _init {
         $self->{host} = '';
         $self->{id} = $args{userID};
         $self->{username} = $args{username};
-        $self->{data} = new PurpleWiki::Database::Text(config => $self->{config});
+        $self->{data} = new PurpleWiki::Database::Text();
     }
 }
 
@@ -189,7 +190,7 @@ sub serialize {
 
     my $separator = $self->{config}->FS2;
 
-    my $data = join($separator, map {$_ . $separator .  $self->{$_}}
+    my $data = join($separator, map {$_ . $separator .  ($self->{$_} || '')}
         ('name', 'version', 'id', 'username', 'ip', 'host',
             'ts', 'tscreate', 'keepts', 'revision'));
     $data .= $separator . 'data' . $separator . $textData;

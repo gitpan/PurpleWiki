@@ -1,6 +1,6 @@
 # PurpleWiki::View::debug.pm
 #
-# $Id$
+# $Id: debug.pm 444 2004-08-05 08:14:37Z eekim $
 #
 # Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
@@ -36,7 +36,8 @@ use PurpleWiki::View::Driver;
 
 ############### Package Globals ###############
 
-our $VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: debug.pm 444 2004-08-05 08:14:37Z eekim $ =~ /\s(\d+)\s/);
 
 our @ISA = qw(PurpleWiki::View::Driver);
 
@@ -115,16 +116,16 @@ sub dtPre { shift->_heading(@_) }
 sub prePre { shift->_heading(@_) }
 sub sketchPre { shift->_heading(@_) }
 
-sub bPre { shift->{outputString} .= uc(shift->type) . ':' }
-sub iPre { shift->{outputString} .= uc(shift->type) . ':' }
-sub ttPre { shift->{outputString} .= uc(shift->type) . ':' }
-sub nowikiPre { shift->{outputString} .= uc(shift->type) . ':' }
-sub transclusionPre { shift->{outputString} .= uc(shift->type) . ':' }
-sub linkPre { shift->{outputString} .= uc(shift->type) . ':' }
-sub urlPre { shift->{outputString} .= uc(shift->type) . ':' }
-sub wikiwordPre { shift->{outputString} .= uc(shift->type) . ':' }
-sub freelinkPre { shift->{outputString} .= uc(shift->type) . ':' }
-sub imagePre { shift->{outputString} .= uc(shift->type) . ':' }
+sub bPre { &_showType(@_) }
+sub iPre { &_showType(@_) }
+sub ttPre { &_showType(@_) }
+sub nowikiPre { &_showType(@_) }
+sub transclusionPre { &_showType(@_) }
+sub linkPre { &_showType(@_) }
+sub urlPre { &_showType(@_) }
+sub wikiwordPre { &_showType(@_) }
+sub freelinkPre { &_showType(@_) }
+sub imagePre { &_showType(@_) }
 
 sub textMain { shift->{outputString} .= shift->content . "\n" }
 sub nowikiMain { shift->{outputString} .= shift->content . "\n" }
@@ -138,10 +139,16 @@ sub imageMain { shift->{outputString} .= shift->content . "\n" }
 
 ############### Private Methods ###############
 
+sub _showType {
+    my ($self, $nodeRef) = @_;
+    $self->{outputString} .= uc($nodeRef->type) . ':';
+}
+
 sub _heading {
     my ($self, $nodeRef) = @_;
     $self->{outputString} .= ' 'x(2 * $self->{indentLevel});
     $self->{outputString} .= $nodeRef->type.":";
+    $self->{outputString} .= $nodeRef->id.':' if ($nodeRef->id);
 }
 
 sub _headingWithNewline {
@@ -169,10 +176,9 @@ by view().
 
 =head1 METHODS
 
-=head2 new(config => $config)
+=head2 new()
 
-Returns a new PurpleWiki::View::debug object  If config is not passed in then a
-fatal error occurs. 
+Returns a new PurpleWiki::View::debug object.
 
 =head2 view($wikiTree)
 

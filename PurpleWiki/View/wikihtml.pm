@@ -1,6 +1,6 @@
 # PurpleWiki::View::wikihtml.pm
 #
-# $Id$
+# $Id: wikihtml.pm 469 2004-08-09 05:08:03Z eekim $
 #
 # Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
@@ -37,7 +37,8 @@ use PurpleWiki::View::Driver;
 
 ############### Package Globals ###############
 
-our $VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: wikihtml.pm 469 2004-08-09 05:08:03Z eekim $ =~ /\s(\d+)\s/);
 
 our @ISA = qw(PurpleWiki::View::Driver);
 
@@ -54,7 +55,6 @@ sub new {
     $self->{pageName} = "";
     $self->{url} = $self->{url} || "";
     $self->{transcluder} = new PurpleWiki::Transclusion(
-        config => $self->{config},
         url => $self->{url});
 
     # standard flag for determining whether or not a hard rule should
@@ -114,21 +114,21 @@ sub ulPre {
     my ($self, $nodeRef) = @_;
 
     $self->_hardRule(0);
-    $self->{outputString} .= '<' . $nodeRef->type . '>';
+    $self->{outputString} .= '<' . $nodeRef->type . ">\n";
 }
 
 sub olPre {
     my ($self, $nodeRef) = @_;
 
     $self->_hardRule(0);
-    $self->{outputString} .= '<' . $nodeRef->type . '>';
+    $self->{outputString} .= '<' . $nodeRef->type . ">\n";
 }
 
 sub dlPre {
     my ($self, $nodeRef) = @_;
 
     $self->_hardRule(0);
-    $self->{outputString} .= '<' . $nodeRef->type . '>';
+    $self->{outputString} .= '<' . $nodeRef->type . ">\n";
 }
 
 sub bPre { shift->{outputString} .= '<' . shift->type . '>' }
@@ -156,14 +156,14 @@ sub hPre {
 sub hPost { 
     my ($self, $node) = @_; 
     $self->{outputString} .= $self->_nid($node->id); 
-    $self->{outputString} .= '</h' . $self->_headerLevel() . '>';
+    $self->{outputString} .= '</h' . $self->_headerLevel() . ">\n";
 }
 
 sub pPre {
-    my $self = shift;
+    my ($self, $node) = @_;
 
     $self->_hardRule(0);
-    $self->_openTagWithNID(@_);
+    $self->_openTagWithNID($node);
 }
 
 sub liPre { shift->_openTagWithNID(@_) }
@@ -183,18 +183,23 @@ sub ddMain { shift->_liRecurse(@_) }
 sub liPost {
     my ($self, $nodeRef) = @_;
 
-    $self->{outputString} .= '</' . $nodeRef->type . '>';
+    $self->{outputString} .= '</' . $nodeRef->type . ">\n";
 }
 
 sub ddPost {
     my ($self, $nodeRef) = @_;
 
-    $self->{outputString} .= '</' . $nodeRef->type . '>';
+    $self->{outputString} .= '</' . $nodeRef->type . ">\n";
+}
+
+sub prePost {
+    my $self = shift;
+    
+    $self->_closeTagWithNID(@_);
 }
 
 sub pPost { shift->_closeTagWithNID(@_) }
 sub dtPost { shift->_closeTagWithNID(@_) }
-sub prePost { shift->_closeTagWithNID(@_) }
 
 sub sketchMain { 
     my $self = shift;
@@ -219,7 +224,12 @@ sub nowikiMain { shift->_quoteHtml(@_) }
 sub linkMain { shift->_quoteHtml(@_) }
 sub urlMain { shift->_quoteHtml(@_) }
 
-sub imageMain { shift->{outputString} .= '<img src="' . shift->href . '" />' }
+sub imageMain {
+    my ($self, $nodeRef) = @_;
+    my $href = $nodeRef->href;
+    $self->{outputString} .= '<img alt="' . $href .
+        '" src="' .  $href . '" />';
+}
 
 sub transclusionMain { 
     my ($self, $nodeRef) = @_;
@@ -291,14 +301,16 @@ sub _openTagWithNID {
 sub _closeTagWithNID {
     my ($self, $nodeRef) = @_;
     $self->{outputString} .= $self->_nid($nodeRef->id);
-    $self->{outputString} .= '</' . $nodeRef->type . '>';
+    $self->{outputString} .= '</' . $nodeRef->type . ">\n";
 }
 
 sub _openLinkTag { 
     my ($self, $nodeRef) = @_;
     my $class = $nodeRef->class || 'extlink';
-    $self->{outputString} .= '<a class="' . $class . '" href="';
-    $self->{outputString} .= $_[1]->href . '">';
+    my $href = $nodeRef->href;
+    $href =~ s/&/&amp;/g; # for XHTML compliance
+    $self->{outputString} .= '<a href="';
+    $self->{outputString} .= $href . qq(" class="$class">);
 }
 
 sub _wikiLink {
@@ -313,34 +325,66 @@ sub _wikiLink {
 
     if ($nodeRef->content =~ /:/) {
         $linkString .= '<a href="' .
-            &PurpleWiki::Page::getInterWikiLink($pageName, $self->{config});
+            PurpleWiki::Page::getInterWikiLink($pageName);
         $linkString .= "#nid$pageNid" if $pageNid;
-        $linkString .= '">' . $nodeRef->content . '</a>';
-    } elsif (&PurpleWiki::Page::exists($pageName, $self->{config})) {
+        $linkString .= '" class="interwiki">' . $nodeRef->content . '</a>';
+    }
+    elsif (&PurpleWiki::Page::exists($pageName)) {
         if ($nodeRef->type eq 'freelink') {
             $linkString .= '<a href="' .  
-            &PurpleWiki::Page::getFreeLink($nodeRef->content, 
-                $self->{config}) .  '">';
+                PurpleWiki::Page::getFreeLink($nodeRef->content) . 
+                '" class="freelink">';
         } else {
             $linkString .= '<a href="' . 
-            &PurpleWiki::Page::getWikiWordLink($pageName, $self->{config});
+            PurpleWiki::Page::getWikiWordLink($pageName);
             $linkString .= "#nid$pageNid" if $pageNid;
-            $linkString .= '">';
+            $linkString .= '" class="wikiword">';
         }
         $linkString .= $nodeRef->content . '</a>';
-    } else {
+    }
+    else {
+        my $createLinkText = $self->{config}->CreateLinkText;
         if ($nodeRef->type eq 'freelink') {
-            $linkString .= '[' . $nodeRef->content . ']';
-            $linkString .= '<a href="' .
-                &PurpleWiki::Page::getFreeLink($nodeRef->content, 
-                    $self->{config}) .  '">';
-        } else {
-            $linkString .= $nodeRef->content;
-            $linkString .= '<a href="' .
-                &PurpleWiki::Page::getWikiWordLink($pageName, $self->{config}) .
-                    '">';
+            if ($createLinkText) {
+                my $linkText .= '[' . $nodeRef->content . ']';
+                my $createLink = '<a href="' .
+                    PurpleWiki::Page::getFreeLink($nodeRef->content) .
+                    '" class="freelink">' . "$createLinkText</a>";
+                if ($self->{config}->CreateLinkBefore) {
+                    $linkString .= $createLink . $linkText;
+                }
+                else {
+                    $linkString .= $linkText . $createLink;
+                }
+            }
+            else {
+                # the bracket syntax isn't necessary, because the
+                # entire text is linked
+                $linkString .= '<a href="' .
+                    PurpleWiki::Page::getFreeLink($nodeRef->content) .
+                    '" class="create">' . $nodeRef->content .
+                    '</a>';
+            }
         }
-        $linkString .= '?</a>';
+        else {
+            if ($createLinkText) {
+                my $linkText .= $nodeRef->content;
+                my $createLink .= '<a href="' .
+                    &PurpleWiki::Page::getWikiWordLink($pageName) .
+                    '" class="wikiword">' . "$createLinkText</a>";
+                if ($self->{config}->CreateLinkBefore) {
+                    $linkString .= $createLink . $linkText;
+                }
+                else {
+                    $linkString .= $linkText . $createLink;
+                }
+            }
+            else {
+                $linkString .= '<a href="' .
+                    &PurpleWiki::Page::getWikiWordLink($pageName) .
+                    '" class="create">' . $nodeRef->content . '</a>';
+            }
+        }
     }
 
     $self->{outputString} .= $linkString;
@@ -386,13 +430,16 @@ sub _nid {
     my ($self, $nid) = @_;
     my $string = '';
 
-    my $nidFace = '#';
-
-    if ($self->{config}->ShowNid) {
-        $nidFace = "($nid)";
-    }
 
     if ($nid) {
+        my $nidFace = '#';
+        if ($self->{config}->ShowNid) {
+            $nidFace = "($nid)";
+        }
+
+        if ($self->{config}->ShowNid) {
+            $nidFace = "($nid)";
+        }
         $string = ' &nbsp;&nbsp; <a class="nid" ' .
             'title="' . "$nid" . '" href="' .
             $self->{url} . '#nid' .
@@ -424,10 +471,9 @@ by view().
 
 =head1 METHODS
 
-=head2 new(config => $config, url => $url, pageName => $pageName)
+=head2 new(url => $url, pageName => $pageName)
 
-Returns a new PurpleWiki::View::wikihtml object  If config is not passed in
-then a fatal error occurs.  
+Returns a new PurpleWiki::View::wikihtml object.
 
 url is the URL prepended to NIDs, defaults to the empty string. 
 

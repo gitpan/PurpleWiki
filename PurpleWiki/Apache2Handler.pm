@@ -1,7 +1,7 @@
 # PurpleWiki::Apache2Handler.pm
 # vi:ai:sw=4:ts=4:et:sm
 #
-# $Id: Apache2Handler.pm,v 1.3 2004/02/12 18:58:35 cdent Exp $
+# $Id: Apache2Handler.pm 463 2004-08-09 01:31:48Z cdent $
 #
 # Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
 #
@@ -31,7 +31,6 @@
 package PurpleWiki::Apache2Handler;
 
 use strict;
-use lib '/home/cdent/src/PurpleWiki';
 use IO::File;
 use PurpleWiki::Config;
 use PurpleWiki::Parser::WikiText;
@@ -39,11 +38,9 @@ use Apache::RequestRec ();
 use Apache::RequestIO ();
 use Apache::URI;
 use Apache::Const -compile => qw(OK);
-use vars qw($VERSION);
-$VERSION = '0.9.2';
 
-my $CONFIG = '/home/cdent/testpurple';
-my $CSS = '/~cdent/purple.css';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Apache2Handler.pm 463 2004-08-09 01:31:48Z cdent $ =~ /\s(\d+)\s/);
 
 sub handler {
     my $r = shift;
@@ -54,21 +51,26 @@ sub handler {
     my $url = $r->construct_url();
 
     my $content = readFile($file);
+    my $CONFIG = $ENV{WIKIDB};
     my $purpleConfig = new PurpleWiki::Config($CONFIG);
     my $wikiParser = new PurpleWiki::Parser::WikiText();
     my $wiki = $wikiParser->parse($content, 
-        config => $purpleConfig,
         wikiword => 1,
-        css_file => $CSS,
         url => $url,
     );
 
-    print $wiki->view('xhtml', 
-        config => $purpleConfig,
-        wikiword => 1,
-        css_file => $CSS,
-        url => $url,
-    );
+    # select and load a template driver
+    my $templateDriver = $purpleConfig->TemplateDriver();
+    my $templateClass = "PurpleWiki::Template::$templateDriver";
+    eval "require $templateClass";
+    my $wikiTemplate = $templateClass->new;
+
+    $wikiTemplate->vars( body => $wiki->view('wikihtml', 
+                                             wikiword => 1,
+                                             url => $url),
+                         title => $wiki->title,
+                         date => $wiki->date );
+    $r->print($wikiTemplate->process('handler'));
 
     # FIXME: sometimes okay is not the desired return code
     return Apache::OK;
@@ -102,14 +104,16 @@ PurpleWiki::Apache2Handler - Wiki text display handler for mod_perl 2
   PerlRequire /path/to/PurpleWiki/Apache2Handler.pm
   <FilesMatch *\.wiki>
       SetHandler perl-script
+      PerlSetEnv WIKIDB /path/to/wikidb
       PerlResponseHandler  PurpleWiki::Apache2Handler
   </FilesMatch>
 
 =head1 DESCRIPTION
 
-A simple display handler for web content files that are formatted
-as PurpleWiki wikitext. The handler reads in the *.wiki file, parses
-it to a PurpleWiki::Tree and presents it as PurpleWiki::View::xhtml.
+A simple display handler for web content files that are formatted as
+PurpleWiki wikitext. The handler reads in the *.wiki file, parses it
+to a PurpleWiki::Tree and presents it using the template defined in
+wikidb/templates/handler.tt.
 
 =head1 METHODS
 

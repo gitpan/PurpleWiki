@@ -1,7 +1,7 @@
 # PurpleWiki::Search::Result.pm
 # vi:ai:sm:et:sw=4:ts=4
 #
-# $Id: Result.pm,v 1.4 2004/01/21 23:24:08 cdent Exp $
+# $Id: Result.pm 366 2004-05-19 19:22:17Z eekim $
 #
 # Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
@@ -31,9 +31,10 @@
 package PurpleWiki::Search::Result;
 
 use strict;
+use PurpleWiki::Config;
 
-use vars qw($VERSION);
-$VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Result.pm 366 2004-05-19 19:22:17Z eekim $ =~ /\s(\d+)\s/);
 
 sub new {
     my $class = shift;
@@ -41,57 +42,68 @@ sub new {
 
     my %params = @_;
 
+    $self->{config} = PurpleWiki::Config->instance();
+
     bless ($self, $class);
 
     return $self;
 }
 
-sub setTitle {
+sub title {
     my $self = shift;
 
-    $self->{title} = shift;
-    return $self;
-}
-
-sub setURL {
-    my $self = shift;
-
-    $self->{URL} = shift;
-    return $self;
-}
-
-sub setSummary {
-    my $self = shift;
-
-    $self->{summary} = shift;
-    return $self;
-}
-
-sub setModifiedTime {
-    my $self = shift;
-
-    $self->{mtime} = shift;
-    return $self;
-}
-
-sub getTitle {
-    my $self = shift;
+    $self->{title} = shift if @_;
     return $self->{title};
 }
 
-sub getURL {
+sub url {
     my $self = shift;
+
+    $self->{URL} = shift if @_;
     return $self->{URL};
 }
 
-sub getSummary {
+sub summary {
     my $self = shift;
+
+    $self->{summary} = shift if @_;
     return $self->{summary};
 }
 
-sub getModifiedTime {
+sub modifiedTime {
     my $self = shift;
+
+    $self->{mtime} = shift if @_;
     return $self->{mtime};
+}
+
+sub lastModified { # return a date/time string
+    return &_date(shift->{mtime});
+}
+
+### private
+
+sub _date {
+    my $ts = shift;
+    my @datetime = localtime($ts);
+    my %monthNames = (
+        0 => 'Jan',
+        1 => 'Feb',
+        2 => 'Mar',
+        3 => 'Apr',
+        4 => 'May',
+        5 => 'Jun',
+        6 => 'Jul',
+        7 => 'Aug',
+        8 => 'Sep',
+        9 => 'Oct',
+        10 => 'Nov',
+        11 => 'Dec');
+    my $year = 1900 + $datetime[5];
+    my $month = $monthNames{$datetime[4]};
+    my $day = $datetime[3];
+
+    return "$month $day, $year";
 }
 
 1;

@@ -1,6 +1,7 @@
 # parser.t
 
 use strict;
+use warnings;
 use Test;
 
 BEGIN { plan tests => 4 };
@@ -10,6 +11,10 @@ use PurpleWiki::Sequence;
 
 my $datadir = '/tmp';
 
+# make sure any existing sequence is killed
+unlink('/tmp/sequence');
+
+### test sequence incrementing
 my $sequence = new PurpleWiki::Sequence($datadir);
 ok(ref $sequence eq 'PurpleWiki::Sequence');
 ok($sequence->getNext() eq '1');

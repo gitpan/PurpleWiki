@@ -1,7 +1,7 @@
 # PurpleWiki::Search::Wiki.pm
 # vi:ai:sm:et:sw=4:ts=4
 #
-# $Id: Wiki.pm,v 1.6 2004/01/21 23:24:08 cdent Exp $
+# $Id: Wiki.pm 438 2004-08-01 03:22:53Z eekim $
 #
 # Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
@@ -36,8 +36,8 @@ use PurpleWiki::Search::Result;
 use PurpleWiki::Database;
 use PurpleWiki::Page;
 
-use vars qw($VERSION);
-$VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Wiki.pm 438 2004-08-01 03:22:53Z eekim $ =~ /\s(\d+)\s/);
 
 # Where the searching is done.
 sub search {
@@ -45,20 +45,13 @@ sub search {
     my $query = shift;
     my @results;
 
-    my $name;
+    my $nameHash;
 
-    foreach $name (PurpleWiki::Database::AllPagesList($self->config())) {
+    foreach $nameHash (PurpleWiki::Database::AllPagesList()) {
+	my $name = $nameHash->{pageName};
         if ($name =~ /$query/i) {
             my $page = $self->_getAndOpenPage($name);
             push(@results, $self->_getResult($page));
-        } elsif ($self->config()->FreeLinks() && ($name =~ m/_/)) {
-            my $freeName = $name;
-            $freeName =~ s/_/ /g;
-            if ($freeName =~ /$query/i) {
-                my $page = $self->_getAndOpenPage($name);
-                push(@results, $self->_getResult($page));
-                next; # FIXME: this effort at skipping the text read uglifies 
-            }
         } else {
             my $page = $self->_getAndOpenPage($name);
             my $text = $page->getText();
@@ -68,7 +61,7 @@ sub search {
         }
     }
 
-    @results = sort {$b->getModifiedTime() <=> $a->getModifiedTime()}
+    @results = sort {$b->modifiedTime() <=> $a->modifiedTime()}
         @results;
 
     return @results;
@@ -78,9 +71,7 @@ sub _getAndOpenPage {
     my $self = shift;
     my $name = shift;
 
-    my $page = new PurpleWiki::Database::Page(id => $name,
-         now => time,
-         config => $self->config());
+    my $page = new PurpleWiki::Database::Page(id => $name, now => time);
     $page->openPage();
 
     return $page;
@@ -93,10 +84,10 @@ sub _getResult {
     my $name = $page->getID();
 
     my $result = new PurpleWiki::Search::Result();
-    $result->setTitle($name);
-    $result->setModifiedTime($page->getTS());
-    $result->setURL(PurpleWiki::Page::getWikiWordLink($name, $self->config()));
-    $result->setSummary(substr($text->getText(), 0, 99) . '...');
+    $result->title($name);
+    $result->modifiedTime($page->getTS());
+    $result->url(PurpleWiki::Page::getWikiWordLink($name));
+    $result->summary(substr($text->getText(), 0, 99) . '...');
 
     return $result;
 }

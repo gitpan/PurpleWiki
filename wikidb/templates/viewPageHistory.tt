@@ -1,0 +1,7 @@
+[% INCLUDE common/header.tt
+           title = "History of $pageName"
+%]
+
+[% INCLUDE lib/pageHistory.tt %]
+
+[% INCLUDE common/footer.tt %]

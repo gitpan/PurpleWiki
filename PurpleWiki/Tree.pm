@@ -1,6 +1,6 @@
 # PurpleWiki::Tree.pm
 #
-# $Id: Tree.pm,v 1.30 2004/02/17 05:49:57 cdent Exp $
+# $Id: Tree.pm 385 2004-06-02 08:39:02Z matthew $
 #
 # Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
 #
@@ -33,8 +33,8 @@ use 5.005;
 use strict;
 use PurpleWiki::StructuralNode;
 
-use vars qw($VERSION);
-$VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Tree.pm 385 2004-06-02 08:39:02Z matthew $ =~ /\s(\d+)\s/);
 
 ### constructor
 
@@ -122,7 +122,7 @@ sub view {
     eval "require $viewer";
     if ($@) { # driver not found
         # FIXME: Need better exception handling.
-        return "Error: $driver View driver not found.";
+        return "Error: Unable to load \"$driver\" view driver: $@\n";
     }
     else {
         my $driverObj = $viewer->new(%params);

@@ -1,6 +1,7 @@
 # parser07.t
 
 use strict;
+use warnings;
 use Test;
 
 BEGIN { plan tests => 74 };
@@ -33,7 +34,7 @@ sub readFile {
 my $config = new PurpleWiki::Config($configdir);
 my $wikiContent = &readFile('t/txt/tree_test11.txt');
 my $wikiParser = PurpleWiki::Parser::WikiText->new;
-my $wiki = $wikiParser->parse($wikiContent, config => $config);
+my $wiki = $wikiParser->parse($wikiContent);
 
 # Wiki content.  ( tests)
 ok(scalar @{$wiki->root->children} == 1);

@@ -30,6 +30,7 @@ use MT::Comment;
 
 my $CONFIG_DIR = '/home/cdent/testwiki';
 my $WIKIWORDS = 1; # set to 0 if you don't want to parse for wikiwords anywhere
+my $PURLENUMBERS = 1; # set to 0 if you don't want purple numbers
 my @TEXT_SECTIONS = qw(text text_more);
 
 ##### PRESENTATION #####
@@ -71,9 +72,8 @@ sub parseForPurple {
     my $config = new PurpleWiki::Config($CONFIG_DIR);
     my $parser = PurpleWiki::Parser::WikiText->new();
     my $wiki = $parser->parse($str,
-            config => $config,
             wikiword => $WIKIWORDS);
-    my $results = $wiki->view('wikihtml', 'url' => $url, config => $config);
+    my $results = $wiki->view('wikihtml', 'url' => $url);
 
     return $results;
 }
@@ -167,10 +167,9 @@ sub _processText {
     $text =~ s/\r//g;
     my $config = new PurpleWiki::Config($CONFIG_DIR);
     my $parser = PurpleWiki::Parser::WikiText->new();
-    my $wiki = $parser->parse($text, 'add_node_ids' => 1,
-        config => $config,
+    my $wiki = $parser->parse($text, 'add_node_ids' => $PURPLENUMBERS,
         'url' => $permalink);
-    $text = $wiki->view('wikitext', config => $config);
+    $text = $wiki->view('wikitext');
     $text =~ s/\r//g;
 
     return $text;

@@ -1,6 +1,6 @@
 # PurpleWiki::View::rawtext.pm
 #
-# $Id$
+# $Id: rawtext.pm 366 2004-05-19 19:22:17Z eekim $
 #
 # Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
@@ -31,11 +31,13 @@ package PurpleWiki::View::rawtext;
 use 5.005;
 use strict;
 use warnings;
+use PurpleWiki::Transclusion;
 use PurpleWiki::View::Driver;
 
 ############### Package Globals ###############
 
-our $VERSION = '0.9.2';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: rawtext.pm 366 2004-05-19 19:22:17Z eekim $ =~ /\s(\d+)\s/);
 
 our @ISA = qw(PurpleWiki::View::Driver);
 
@@ -56,6 +58,9 @@ sub new {
     $self->{listNumber} = 1;
     $self->{prevDefType} = "";
     $self->{links} = [];
+    $self->{transcluder} = new PurpleWiki::Transclusion(
+        config => $self->{config},
+        url => $self->{url});
 
     bless($self, $class);
     return $self;
@@ -140,7 +145,17 @@ sub iPost { shift->{outputString} .= "_" }
 
 sub textMain { shift->{outputString} .= shift->content }
 sub nowikiMain { shift->{outputString} .= shift->content }
-sub transclusionMain { shift->{outputString} .= shift->content }
+sub transclusionMain {
+    my ($self, $nodeRef) = @_;
+    my $transcluded = $self->{transcluder}->get($nodeRef->content);
+    if (ref $transcluded) {
+        # Add the transcluded content into our tree if it's a reference
+        $self->traverse($transcluded->content);
+    } else {
+        # Add the transcluded string to our output if it isn't a reference
+        $self->{outputString} .= $transcluded;
+    }
+}
 sub linkMain { shift->{outputString} .= shift->content }
 
 sub transclusionPre { shift->{outputString} .= "transclude: " }
@@ -246,10 +261,9 @@ by view().
 
 =head1 METHODS
 
-=head2 new(config => $config)
+=head2 new()
 
-Returns a new PurpleWiki::View::text object  If config is not passed in then a
-fatal error occurs.  
+Returns a new PurpleWiki::View::text object.
 
 =head2 view($wikiTree)
 

@@ -1,9 +1,9 @@
 # PurpleWiki::Config.pm
 # vi:ai:sm:et:sw=4:ts=4
 #
-# $Id: Config.pm,v 1.13 2004/02/12 18:22:42 cdent Exp $
+# $Id: Config.pm 469 2004-08-09 05:08:03Z eekim $
 #
-# Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
+# Copyright (c) Blue Oxen Associates 2002-2004.  All rights reserved.
 #
 # This file is part of PurpleWiki.  PurpleWiki is derived from:
 #
@@ -32,13 +32,15 @@ package PurpleWiki::Config;
 
 # PurpleWiki Configuration 
 
-# $Id: Config.pm,v 1.13 2004/02/12 18:22:42 cdent Exp $
+# $Id: Config.pm 469 2004-08-09 05:08:03Z eekim $
 
 use strict;
 use AppConfig;
+use PurpleWiki::Singleton;
+use base qw(PurpleWiki::Singleton);
 
-use vars qw($VERSION);
-$VERSION = '0.9.1';
+our $VERSION;
+$VERSION = sprintf("%d", q$Id: Config.pm 469 2004-08-09 05:08:03Z eekim $ =~ /\s(\d+)\s/);
 
 # Field separators that delimit page storage
 my $FS  = "\xb3";      # The FS character is a superscript "3"
@@ -51,17 +53,16 @@ my $FS3 = $FS . "3";   # The FS character is not allowed in user data.
 # FIXME: AppConfig apparently requires definition of config file
 # variable outside the config file. That's painful.
 my @BOOLEAN_CONFIGS = qw( UseSubpage EditAllowed UseDiff FreeLinks
-    WikiLinks AdminDelete RunCGI RecentTop UseDiffLog KeepMajor
-    KeepAuthor BracketText UseAmPm UseLookup FreeUpper EmailNotify
-    EmbedWiki LogoLeft ShowEdits NonEnglish SimpleLinks ShowNid);
-my @SCALAR_CONFIGS = qw( DataDir ScriptName CookieName SiteName
-    HomePage RCName LogoUrl
-    StyleSheet SiteBase FullUrl ScriptTZ RcDefault KeepDays AdminPass
-    EditPass EmailFrom SendMail FooterNote EditNote UserGotoBar
+    WikiLinks RunCGI RecentTop UseDiffLog KeepMajor KeepAuthor
+    BracketText UseAmPm FreeUpper ShowEdits NonEnglish
+    SimpleLinks ShowNid UseINames LoginToEdit CreateLinkBefore);
+my @SCALAR_CONFIGS = qw( DataDir ScriptName SiteName HomePage RCName 
+    FullUrl ScriptTZ RcDefault KeepDays CreateLinkText
     HttpCharset MaxPost PageDir UserDir KeepDir TempDir LockDir
-    InterFile RcFile RcOldFile MovableTypeDirectory ArtsDirectory
-    GoogleWSDL GoogleKey HttpUser HttpPass Umask LocalSequenceDir
-    RemoteSequenceURL);
+    InterFile RcFile RcOldFile TemplateDir MovableTypeDirectory
+    ArtsDirectory GoogleWSDL GoogleKey HttpUser HttpPass Umask
+    LocalSequenceDir RemoteSequenceURL ScriptDir TemplateDriver
+    ServiceProviderName ServiceProviderKey ReturnUrl);
 my @LIST_CONFIGS = qw( RcDays SearchModule MovableTypeBlogID IrcLogConfig);
 
 # Sets up the strings and regular expressions for matching
@@ -79,7 +80,7 @@ sub new {
     bless ($self, $class);
 
     $self->_init($directory);
-
+    $class->setInstance($self);
     return $self;
 }
 
@@ -245,12 +246,21 @@ PurpleWiki::Config - Configuration object.
 Parses the PurpleWiki config file, which is in AppConfig format.
 Configuration variables are made available in methods.
 
+The PurpleWiki::Config module inherits from Singleton, so you should only have
+to create one new PurpleWiki::Config module per process.  Subsequent instances
+can be gotten from a call to the instance() method.
+
 =head1 METHODS
 
 =head2 new($directory)
 
 Parses "$directory/config", and creates methods for each variable
 using AUTOLOAD.
+
+=head2 instance()
+
+Returns the current instance of the PurpleWiki::Config object, or undef if
+no such instance exists.
 
 =head1 AUTHORS
 
