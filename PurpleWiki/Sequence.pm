@@ -1,7 +1,7 @@
 # PurpleWiki::Sequence.pm
 # vi:sw=4:ts=4:ai:sm:et:tw=0
 #
-# $Id: Sequence.pm,v 1.6 2004/02/12 18:22:42 cdent Exp $
+# $Id: Sequence.pm,v 1.6.2.1 2004/02/24 14:38:31 cdent Exp $
 #
 # Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
 #
@@ -33,7 +33,7 @@ package PurpleWiki::Sequence;
 # Tool for generating PurpleWiki::Sequence numbers for use
 # in Nids
 
-# $Id: Sequence.pm,v 1.6 2004/02/12 18:22:42 cdent Exp $
+# $Id: Sequence.pm,v 1.6.2.1 2004/02/24 14:38:31 cdent Exp $
 
 use strict;
 use IO::File;
@@ -134,7 +134,7 @@ sub _tieIndex {
     my $index = shift;
 
     tie %$index, 'DB_File', $self->{indexfile}, 
-        O_RDWR|O_CREAT, 0444, $DB_HASH or
+        O_RDWR|O_CREAT, 0666, $DB_HASH or
         die "unable to tie " . $self->{indexfile} . ' ' . $!;
 }
 
