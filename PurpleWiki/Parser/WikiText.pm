@@ -1,7 +1,7 @@
 # PurpleWiki::Parser::WikiText.pm
 # vi:ai:sm:et:sw=4:ts=4
 #
-# $Id: WikiText.pm,v 1.18 2003/08/18 07:10:53 eekim Exp $
+# $Id: WikiText.pm,v 1.21 2004/02/12 18:22:42 cdent Exp $
 #
 # Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
 #
@@ -39,7 +39,7 @@ use PurpleWiki::Sequence;
 use PurpleWiki::Page;
 
 use vars qw($VERSION);
-$VERSION = '0.9';
+$VERSION = '0.9.1';
 
 my $sequence;
 my $url;
@@ -80,7 +80,8 @@ sub parse {
     my %params = @_;
 
     $url = $params{url};
-    $sequence = new PurpleWiki::Sequence($params{config}->DataDir);
+    $sequence = new PurpleWiki::Sequence($params{config}->DataDir,
+        $params{config}->RemoteSequence);
 
     # set default parameters
     $params{wikiword} = $params{config}->WikiLinks
@@ -147,6 +148,9 @@ sub parse {
             else {
                 push @authors, [$authorString];
             }
+        }
+        elsif ($line =~ /^\{sketch\}$/) {
+            $currentNode->insertChild(type=>'sketch');
         }
         elsif ($line =~ /^($aggregateListRegExp)$/) { # Process lists
             #

@@ -3,7 +3,7 @@
 #
 # wiki.pl - PurpleWiki
 #
-# $Id: wiki.pl,v 1.10 2003/07/19 09:08:41 eekim Exp $
+# $Id: wiki.pl,v 1.14 2004/02/07 02:20:57 cdent Exp $
 #
 # Copyright (c) Blue Oxen Associates 2002.  All rights reserved.
 #
@@ -38,6 +38,7 @@ use PurpleWiki::Database;
 use PurpleWiki::Database::Page;
 use PurpleWiki::Database::User;
 use PurpleWiki::Database::KeptRevision;
+use PurpleWiki::Search::Engine;
 use CGI;
 use CGI::Carp qw(fatalsToBrowser);
 
@@ -65,6 +66,9 @@ my $TimeZoneOffset;     # User's prefernce for timezone. FIXME: can we
 # we only need one of each these per run
 $wikiParser = PurpleWiki::Parser::WikiText->new;
 $config = new PurpleWiki::Config($CONFIG_DIR);
+
+# Set our umask if one was put in the config file. - matthew
+umask(oct($config->Umask)) if defined $config->Umask;
 
 # The "main" program, called from the end of this script file.
 sub DoWikiRequest {
@@ -508,7 +512,10 @@ sub DoHistory {
     config => $config);
   foreach my $section (reverse sort {$a->getRevision() <=> $b->getRevision()}
                     $keptRevision->getSections()) {
-    $html .= &GetHistoryLine($id, $section, $canEdit, 0);
+    # If KeptRevision == Current Revision don't print it. - matthew
+    if ($section->getRevision() != $page->getSection()->getRevision()) {
+      $html .= &GetHistoryLine($id, $section, $canEdit, 0);
+    }
   }
   print $html;
   print &GetCommonFooter();
@@ -916,7 +923,8 @@ sub WikiToHTML {
 
   my $wiki = $wikiParser->parse($pageText, config => $config, 'freelink' => $config->FreeLinks);
   my $url = $q->url(-full => 1) . '?' . $id;
-  return $wiki->view('wikihtml', config => $config, url => $url);
+  return $wiki->view('wikihtml', config => $config, url => $url,
+                     pageName => $id);
 }
 
 sub QuoteHtml {
@@ -1758,7 +1766,12 @@ sub DoSearch {
   }
   print &GetHeader('', &QuoteHtml("Search for: $string"), '');
   print '<br>';
-  &PrintPageList(&SearchTitleAndBody($string));
+
+  # do the new pluggable search
+  my $search = new PurpleWiki::Search::Engine(config => $config);
+  $search->search($string);
+  print $search->asHTML();
+
   print &GetCommonFooter();
 }
 
@@ -1886,12 +1899,15 @@ sub DoPost {
     $page->setPageCache('oldauthor', $section->getRevision());
   }
 
+  # I removed the if statement and moved the 3 lines of code down below 
+  #     -matthew
+  #
   # only save section if it is not the first
-  if ($section->getRevision() > 0) {
-    $keptRevision->addSection($section, $Now);
-    $keptRevision->trimKepts($Now);
-    $keptRevision->save();
-  }
+  #if ($section->getRevision() > 0) {
+  #  $keptRevision->addSection($section, $Now);
+  #  $keptRevision->trimKepts($Now);
+  #  $keptRevision->save();
+  #}
 
   if ($config->UseDiff) {
     # FIXME: how many args does it take to screw a pooch?
@@ -1905,6 +1921,9 @@ sub DoPost {
   # FIXME: redundancy in data structure here
   $section->setRevision($section->getRevision() + 1);
   $section->setTS($Now);
+  $keptRevision->addSection($section, $Now);
+  $keptRevision->trimKepts($Now);
+  $keptRevision->save();
   $page->setRevision($section->getRevision());
   $page->setTS($Now);
   $page->save();
@@ -1981,30 +2000,6 @@ END_MAIL_CONTENT
     # $EmailFrom string needn't be a real email address.
     &SendEmail($address, $config->EmailFrom, $address, $subject, $content);
   }
-}
-
-sub SearchTitleAndBody {
-  my ($string) = @_;
-  my ($name, $freeName, @found);
-  my $page;
-  my $text;
-
-  foreach $name (&PurpleWiki::Database::AllPagesList($config)) {
-    $page = new PurpleWiki::Database::Page('id' => $name, 'now' => $Now, 
-      config => $config);
-    $page->openPage();
-    $text = $page->getText();
-    if (($text->getText() =~ /$string/i) || ($name =~ /$string/i)) {
-      push(@found, $name);
-    } elsif ($config->FreeLinks && ($name =~ m/_/)) {
-      $freeName = $name;
-      $freeName =~ s/_/ /g;
-      if ($freeName =~ /$string/i) {
-        push(@found, $name);
-      }
-    }
-  }
-  return @found;
 }
 
 # Note: all diff and recent-list operations should be done within locks.

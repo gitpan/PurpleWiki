@@ -1,7 +1,7 @@
 # PurpleWiki::Config.pm
 # vi:ai:sm:et:sw=4:ts=4
 #
-# $Id: Config.pm,v 1.5 2003/08/18 07:10:53 eekim Exp $
+# $Id: Config.pm,v 1.13 2004/02/12 18:22:42 cdent Exp $
 #
 # Copyright (c) Blue Oxen Associates 2002-2003.  All rights reserved.
 #
@@ -32,13 +32,13 @@ package PurpleWiki::Config;
 
 # PurpleWiki Configuration 
 
-# $Id: Config.pm,v 1.5 2003/08/18 07:10:53 eekim Exp $
+# $Id: Config.pm,v 1.13 2004/02/12 18:22:42 cdent Exp $
 
 use strict;
 use AppConfig;
 
 use vars qw($VERSION);
-$VERSION = '0.9';
+$VERSION = '0.9.1';
 
 # Field separators that delimit page storage
 my $FS  = "\xb3";      # The FS character is a superscript "3"
@@ -53,14 +53,15 @@ my $FS3 = $FS . "3";   # The FS character is not allowed in user data.
 my @BOOLEAN_CONFIGS = qw( UseSubpage EditAllowed UseDiff FreeLinks
     WikiLinks AdminDelete RunCGI RecentTop UseDiffLog KeepMajor
     KeepAuthor BracketText UseAmPm UseLookup FreeUpper EmailNotify
-    EmbedWiki LogoLeft ShowEdits NonEnglish SimpleLinks);
+    EmbedWiki LogoLeft ShowEdits NonEnglish SimpleLinks ShowNid);
 my @SCALAR_CONFIGS = qw( DataDir ScriptName CookieName SiteName
     HomePage RCName LogoUrl
     StyleSheet SiteBase FullUrl ScriptTZ RcDefault KeepDays AdminPass
     EditPass EmailFrom SendMail FooterNote EditNote UserGotoBar
     HttpCharset MaxPost PageDir UserDir KeepDir TempDir LockDir
-    InterFile RcFile RcOldFile);
-my @LIST_CONFIGS = qw( RcDays);
+    InterFile RcFile RcOldFile MovableTypeDirectory ArtsDirectory
+    GoogleWSDL GoogleKey HttpUser HttpPass Umask RemoteSequence);
+my @LIST_CONFIGS = qw( RcDays SearchModule MovableTypeBlogID IrcLogConfig);
 
 # Sets up the strings and regular expressions for matching
 

@@ -17,6 +17,8 @@ StyleSheet  = /~cdent/usemod.css  # URL for CSS stylesheet (like "/wiki.css")
 #SiteBase    = ""              # Full URL for <BASE> header
 #FullUrl     = ""              # Set if the auto-detected URL is wrong
 #ScriptTZ    = ""              # Local time zone
+#Umask       = 0002	       # the umask used when writing files
+#RemoteSequence = http://www.burningchrome.com:8000/~cdent/nid # EXPERIMENTAL
 
 # Recent Changes
 RcDefault   = 30               # Default number of RecentChanges days
@@ -31,6 +33,10 @@ KeepDays    = 14               # Days to keep old revisions
 # FIXME: need better understanding of how these things are used
 #AdminPass   = ""              # Set to non-blank to enable password(s)
 #EditPass    = ""              # Like AdminPass, but for editing only
+
+# HttpAuth username and password
+# HttpUser   = ""
+# HttpPass   = ""
 
 # Email Notifications
 EmailFrom   = Wiki           # Text for "From: " field of email notes.
@@ -53,6 +59,7 @@ FreeLinks              # if set use [[word]] links
 WikiLinks              # if set use LinkPattern
 AdminDelete            # if set Admin only page
 RunCGI                 # if set Run script as CGI
+ShowNid                # if set value of Nid is shown
 #EmailNotify            # if set use email notices
 #EmbedWiki              # if set no headers/footers
 #NonEnglish             # non english characters in links?
@@ -69,6 +76,25 @@ UseLookup              # if set lookup host names
 FreeUpper              # if set force upper case
 #LogoLeft              # if set logo on left
 #ShowEdits             # if set show minor edits
+
+# Search Modules:
+SearchModule	=	Wiki
+#SearchModule	=	MovableType
+#SearchModule	=	Blosxom
+#SearchModule	=	Arts
+#SearchModule	=	IrcLogger
+#SearchModule	=	Google
+
+
+# Search Additional Config
+#MovableTypeDirectory	= 	/home/cdent/www/mt/
+#MovableTypeBlogID	=	1
+#ArtsDirectory		=	/usr/local/etc/
+#IrcLogConfig		=	/home/kb-dev/ircquotes/kbdev.config
+#IrcLogConfig		=	/home/kb-dev/ircquotes/kbeditors.config
+#GoogleWSDL             =       /home/cdent/lib/GoogleSearch.wsdl
+#GoogleKey              =       XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+
 
 # == You should not have to change anything below this line. =============
 PageDir     = $DataDir/page      # Stores page data
